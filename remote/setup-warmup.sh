@@ -36,7 +36,7 @@ REMOTE_DIR="$FRANKEN_INSTALL_DIR"
 
 echo ""
 echo "Creating remote directory structure..."
-ssh "$FRANKEN_SERVER_IP" "mkdir -p $REMOTE_DIR/bin"
+ssh -t "$FRANKEN_SERVER_IP" "sudo mkdir -p $REMOTE_DIR/bin && sudo chown \$USER:\$USER $REMOTE_DIR $REMOTE_DIR/bin"
 
 echo "Copying configuration files..."
 scp "$SCRIPT_DIR/../.env" "$FRANKEN_SERVER_IP:$REMOTE_DIR/.env"
