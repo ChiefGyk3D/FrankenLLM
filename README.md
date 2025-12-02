@@ -231,9 +231,28 @@ Auto-detects local or remote from your configuration and:
 ./manage.sh disable
 ```
 
-### Health Monitoring
+### Interactive Chat
 
 ```bash
+# Start interactive chat session
+./bin/chat.sh
+
+# Features:
+# - Select which GPU to use
+# - Choose from available models
+# - Real-time conversation
+# - Commands: 'quit', 'exit', 'clear', 'info'
+```
+
+### Testing & Monitoring
+
+```bash
+# Test connections and optionally chat with both GPUs
+./bin/test-connection.sh
+
+# Test both LLMs with a specific query
+./bin/test-llm.sh "Your question here"
+
 # Quick health check (no sudo required)
 ./bin/health-check.sh
 
