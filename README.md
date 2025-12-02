@@ -1,7 +1,7 @@
 # 🧟 FrankenLLM
 
 <div align="center">
-  <img src="media/banner.png" alt="FrankenLLM Banner" width="800"/>
+  <img src="media/banner.png" alt="FrankenLLM Banner" width="600"/>
 </div>
 
 **Stitched-together GPUs, but it lives!**
