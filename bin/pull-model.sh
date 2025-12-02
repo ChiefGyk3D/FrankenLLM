@@ -19,15 +19,22 @@ if [ -z "$MODEL_NAME" ]; then
     exit 1
 fi
 
-echo "=== Pulling $MODEL_NAME on both GPUs ==="
+echo "=== Pulling $MODEL_NAME on all GPUs ==="
+echo "GPU Count: $FRANKEN_GPU_COUNT"
 echo ""
 
 echo "GPU 0 ($FRANKEN_GPU0_NAME) - Port $FRANKEN_GPU0_PORT:"
 franken_exec "OLLAMA_HOST=http://localhost:$FRANKEN_GPU0_PORT ollama pull $MODEL_NAME"
 
-echo ""
-echo "GPU 1 ($FRANKEN_GPU1_NAME) - Port $FRANKEN_GPU1_PORT:"
-franken_exec "OLLAMA_HOST=http://localhost:$FRANKEN_GPU1_PORT ollama pull $MODEL_NAME"
+if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+    echo ""
+    echo "GPU 1 ($FRANKEN_GPU1_NAME) - Port $FRANKEN_GPU1_PORT:"
+    franken_exec "OLLAMA_HOST=http://localhost:$FRANKEN_GPU1_PORT ollama pull $MODEL_NAME"
+fi
 
 echo ""
-echo "✅ Model $MODEL_NAME pulled on both GPUs!"
+if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+    echo "✅ Model $MODEL_NAME pulled on all $FRANKEN_GPU_COUNT GPUs!"
+else
+    echo "✅ Model $MODEL_NAME pulled on GPU 0!"
+fi

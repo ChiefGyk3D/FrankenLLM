@@ -13,34 +13,49 @@ fi
 
 ACTION="${1:-help}"
 
+# Build service list based on GPU count
+SERVICES="ollama-gpu0"
+if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+    SERVICES="$SERVICES ollama-gpu1"
+fi
+
 case $ACTION in
   start)
     echo "Starting services on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" 'sudo systemctl start ollama-gpu0 ollama-gpu1 && echo "✅ Services started" && sudo systemctl status ollama-gpu0 ollama-gpu1 --no-pager | head -20'
+    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl start $SERVICES && echo '✅ Services started' && sudo systemctl status $SERVICES --no-pager | head -20"
     ;;
   stop)
     echo "Stopping services on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" 'sudo systemctl stop ollama-gpu0 ollama-gpu1 && echo "✅ Services stopped"'
+    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl stop $SERVICES && echo '✅ Services stopped'"
     ;;
   restart)
     echo "Restarting services on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" 'sudo systemctl restart ollama-gpu0 ollama-gpu1 && echo "✅ Services restarted" && sudo systemctl status ollama-gpu0 ollama-gpu1 --no-pager | head -20'
+    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl restart $SERVICES && echo '✅ Services restarted' && sudo systemctl status $SERVICES --no-pager | head -20"
     ;;
   status)
     echo "Checking status on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" 'sudo systemctl status ollama-gpu0 ollama-gpu1 --no-pager'
+    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl status $SERVICES --no-pager"
     ;;
   logs0)
     echo "Viewing GPU 0 logs on $FRANKEN_SERVER_IP..."
     ssh -t "$FRANKEN_SERVER_IP" 'sudo journalctl -u ollama-gpu0 -n 50 -f'
     ;;
   logs1)
-    echo "Viewing GPU 1 logs on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" 'sudo journalctl -u ollama-gpu1 -n 50 -f'
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+        echo "Viewing GPU 1 logs on $FRANKEN_SERVER_IP..."
+        ssh -t "$FRANKEN_SERVER_IP" 'sudo journalctl -u ollama-gpu1 -n 50 -f'
+    else
+        echo "❌ Only 1 GPU configured (GPU_COUNT=$FRANKEN_GPU_COUNT)"
+        exit 1
+    fi
     ;;
   logs)
     echo "Viewing recent logs on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" 'echo "=== GPU 0 ===" && sudo journalctl -u ollama-gpu0 -n 20 --no-pager && echo "" && echo "=== GPU 1 ===" && sudo journalctl -u ollama-gpu1 -n 20 --no-pager'
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+        ssh -t "$FRANKEN_SERVER_IP" 'echo "=== GPU 0 ===" && sudo journalctl -u ollama-gpu0 -n 20 --no-pager && echo "" && echo "=== GPU 1 ===" && sudo journalctl -u ollama-gpu1 -n 20 --no-pager'
+    else
+        ssh -t "$FRANKEN_SERVER_IP" 'echo "=== GPU 0 ===" && sudo journalctl -u ollama-gpu0 -n 20 --no-pager'
+    fi
     ;;
   *)
     echo "FrankenLLM - Remote Service Control"

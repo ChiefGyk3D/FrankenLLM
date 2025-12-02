@@ -55,7 +55,7 @@ if [ "$FRANKEN_IS_LOCAL" = "true" ]; then
     
     update_service "ollama-gpu0"
     
-    if [ "$GPU_COUNT" -ge 2 ]; then
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
         update_service "ollama-gpu1"
     fi
     
@@ -66,7 +66,7 @@ if [ "$FRANKEN_IS_LOCAL" = "true" ]; then
     
     echo "Restarting services..."
     sudo systemctl restart ollama-gpu0
-    if [ "$GPU_COUNT" -ge 2 ]; then
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
         sudo systemctl restart ollama-gpu1
     fi
     
@@ -90,7 +90,7 @@ else
         sudo sed -i '/Environment=\"OLLAMA_HOST/a Environment=\"OLLAMA_KEEP_ALIVE=-1\"' /etc/systemd/system/ollama-gpu0.service && echo '✅ Added OLLAMA_KEEP_ALIVE=-1 to ollama-gpu0'
     fi"
     
-    if [ "$GPU_COUNT" -ge 2 ]; then
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
         echo ""
         echo "Updating ollama-gpu1..."
         franken_exec "if sudo grep -q 'OLLAMA_KEEP_ALIVE' /etc/systemd/system/ollama-gpu1.service 2>/dev/null; then
@@ -106,7 +106,7 @@ else
     
     echo "Restarting services..."
     franken_exec "sudo systemctl restart ollama-gpu0"
-    if [ "$GPU_COUNT" -ge 2 ]; then
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
         franken_exec "sudo systemctl restart ollama-gpu1"
     fi
     

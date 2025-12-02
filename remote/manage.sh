@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # FrankenLLM - Remote Service Management
 # Stitched-together GPUs, but it lives!
 
@@ -13,36 +14,42 @@ fi
 
 ACTION="${1:-status}"
 
+# Build service list based on GPU count
+SERVICES="ollama-gpu0"
+if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+    SERVICES="$SERVICES ollama-gpu1"
+fi
+
 case $ACTION in
   start)
     echo "Starting Ollama services on $FRANKEN_SERVER_IP..."
     echo ""
     echo "To start services, run these commands on the server:"
     echo "  ssh $FRANKEN_SERVER_IP"
-    echo "  sudo systemctl start ollama-gpu0 ollama-gpu1"
+    echo "  sudo systemctl start $SERVICES"
     echo ""
     echo "Or run this one-liner:"
-    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl start ollama-gpu0 ollama-gpu1'"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl start $SERVICES'"
     ;;
   stop)
     echo "Stopping Ollama services on $FRANKEN_SERVER_IP..."
     echo ""
     echo "To stop services, run these commands on the server:"
     echo "  ssh $FRANKEN_SERVER_IP"
-    echo "  sudo systemctl stop ollama-gpu0 ollama-gpu1"
+    echo "  sudo systemctl stop $SERVICES"
     echo ""
     echo "Or run this one-liner:"
-    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl stop ollama-gpu0 ollama-gpu1'"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl stop $SERVICES'"
     ;;
   restart)
     echo "Restarting Ollama services on $FRANKEN_SERVER_IP..."
     echo ""
     echo "To restart services, run these commands on the server:"
     echo "  ssh $FRANKEN_SERVER_IP"
-    echo "  sudo systemctl restart ollama-gpu0 ollama-gpu1"
+    echo "  sudo systemctl restart $SERVICES"
     echo ""
     echo "Or run this one-liner:"
-    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl restart ollama-gpu0 ollama-gpu1'"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl restart $SERVICES'"
     ;;
   status)
     echo "=== Ollama Service Status on $FRANKEN_SERVER_IP ==="
@@ -53,31 +60,28 @@ case $ACTION in
     echo ""
     echo "For detailed systemctl status, SSH into the server and run:"
     echo "  ssh $FRANKEN_SERVER_IP"
-    echo "  sudo systemctl status ollama-gpu0 ollama-gpu1"
+    echo "  sudo systemctl status $SERVICES"
     ;;
   logs)
     echo "=== Ollama Logs on $FRANKEN_SERVER_IP ==="
     echo ""
-    echo "To view logs, run these commands on the server:"
-    echo "  ssh $FRANKEN_SERVER_IP"
-    echo "  sudo journalctl -u ollama-gpu0 -n 30"
-    echo "  sudo journalctl -u ollama-gpu1 -n 30"
-    echo ""
-    echo "Or run these one-liners:"
+    echo "To view logs, SSH into the server:"
     echo "  ssh -t $FRANKEN_SERVER_IP 'sudo journalctl -u ollama-gpu0 -n 30'"
-    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo journalctl -u ollama-gpu1 -n 30'"
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+        echo "  ssh -t $FRANKEN_SERVER_IP 'sudo journalctl -u ollama-gpu1 -n 30'"
+    fi
     ;;
   enable)
     echo "Enabling Ollama services on boot on $FRANKEN_SERVER_IP..."
     echo ""
     echo "To enable services on boot, run:"
-    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl enable ollama-gpu0 ollama-gpu1'"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl enable $SERVICES'"
     ;;
   disable)
     echo "Disabling Ollama services on boot on $FRANKEN_SERVER_IP..."
     echo ""
     echo "To disable services on boot, run:"
-    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl disable ollama-gpu0 ollama-gpu1'"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl disable $SERVICES'"
     ;;
   *)
     echo "FrankenLLM - Remote Service Management"
