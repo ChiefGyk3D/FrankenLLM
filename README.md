@@ -25,6 +25,7 @@ Run separate LLM models on each of your NVIDIA GPUs simultaneously. Perfect for 
 - ⚙️ **Systemd Services** - Automatic startup, monitoring, and restart on failure
 - 🔥 **Auto-Warmup** - Models automatically load into GPU memory on boot
 - ⚡ **Configurable** - Support for 1+ GPUs with flexible model selection
+- 🖥️ **Headless Ready** - Designed for Ubuntu Server 24.04 (tested with Linux 6.14 + NVIDIA 580 drivers)
 
 ---
 
