@@ -284,11 +284,57 @@ Available sizes: 270M, 1B, **4B**, **12B**, 27B
 
 Found a bug? Want to add a feature? PRs welcome!
 
+### Contribution Guidelines
+
+- Follow clean code practices and shell scripting best practices
+- Test your changes on both local and remote setups
+- Add comments to complex logic
+- Update relevant documentation in `docs/`
+- Ensure scripts are executable and have proper shebangs
+- Test with different GPU configurations when possible
+
+---
+
+## � Documentation
+
+Complete documentation is available in the [`docs/`](docs/) directory:
+
+- **[Full README](docs/README.md)** - Complete documentation with all features
+- **[Quick Start](docs/QUICKSTART.md)** - Fast command reference
+- **[Remote Management Guide](docs/REMOTE_MANAGEMENT.md)** - SSH and service management
+- **[Issues Resolved](docs/ISSUES_RESOLVED.md)** - Troubleshooting guide
+- **[Setup Complete Guide](docs/SETUP_COMPLETE.md)** - Post-installation reference
+- **[Reorganization Notes](docs/REORGANIZATION.md)** - Project structure details
+
+### Quick Links
+- 🚀 **[Getting Started](#-quick-start)**
+- 🎯 **[Recommended Models](#-recommended-models)**
+- 🎮 **[Usage Guide](#-usage)**
+- 🔧 **[Configuration](#️-configuration)**
+- 🔍 **[Troubleshooting](#-troubleshooting)**
+
+---
+
+## 🆘 Support
+
+If you encounter any issues or have questions:
+
+1. **Check Documentation**: Review the docs in [`docs/`](docs/) directory
+2. **GPU Detection**: Run `./bin/check-gpus.sh` to verify GPU configuration
+3. **Health Check**: Use `./bin/health-check.sh` to verify services are online
+4. **Service Logs**: Check logs with `./manage.sh logs` (external terminal)
+5. **Model Issues**: Run `./bin/warmup-models.sh` to pre-load correct models
+6. **SSH Problems**: See [Remote Management Guide](docs/REMOTE_MANAGEMENT.md)
+7. **Open an Issue**: If problems persist, [open a GitHub issue](https://github.com/ChiefGyk3D/FrankenLLM/issues)
+
 ---
 
 ## 📜 License
 
-MIT License - see LICENSE file
+This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+SPDX-License-Identifier: MPL-2.0
 
 ---
 
@@ -300,4 +346,90 @@ MIT License - see LICENSE file
 
 ---
 
+## 💝 Donations and Tips
+
+If you find FrankenLLM useful, consider supporting development:
+
+**Donate**:
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center"><a href="https://patreon.com/chiefgyk3d?utm_medium=unknown&utm_source=join_link&utm_campaign=creatorshare_creator&utm_content=copyLink" title="Patreon"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/patreon.svg" width="32" height="32" alt="Patreon"/></a></td>
+      <td align="center"><a href="https://streamelements.com/chiefgyk3d/tip" title="StreamElements"><img src="media/streamelements.png" width="32" height="32" alt="StreamElements"/></a></td>
+    </tr>
+    <tr>
+      <td align="center">Patreon</td>
+      <td align="center">StreamElements</td>
+    </tr>
+  </table>
+</div>
+
+### Cryptocurrency Tips
+
+<div align="center">
+  <table style="border:none;">
+    <tr>
+      <td align="center" style="padding:8px; min-width:120px;">
+        <img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/bitcoin.svg" width="28" height="28" alt="Bitcoin"/>
+      </td>
+      <td align="left" style="padding:8px;">
+        <b>Bitcoin</b><br/>
+        <code style="font-size:12px;">bc1qztdzcy2wyavj2tsuandu4p0tcklzttvdnzalla</code>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" style="padding:8px; min-width:120px;">
+        <img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/monero.svg" width="28" height="28" alt="Monero"/>
+      </td>
+      <td align="left" style="padding:8px;">
+        <b>Monero</b><br/>
+        <code style="font-size:12px;">84Y34QubRwQYK2HNviezeH9r6aRcPvgWmKtDkN3EwiuVbp6sNLhm9ffRgs6BA9X1n9jY7wEN16ZEpiEngZbecXseUrW8SeQ</code>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" style="padding:8px; min-width:120px;">
+        <img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/ethereum.svg" width="28" height="28" alt="Ethereum"/>
+      </td>
+      <td align="left" style="padding:8px;">
+        <b>Ethereum</b><br/>
+        <code style="font-size:12px;">0x554f18cfB684889c3A60219BDBE7b050C39335ED</code>
+      </td>
+    </tr>
+  </table>
+</div>
+
+---
+
+<div align="center">
+
+Made with ❤️ by [ChiefGyk3D](https://github.com/ChiefGyk3D)
+
+## Author & Socials
+
+<table>
+  <tr>
+    <td align="center"><a href="https://social.chiefgyk3d.com/@chiefgyk3d" title="Mastodon"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/mastodon.svg" width="32" height="32" alt="Mastodon"/></a></td>
+    <td align="center"><a href="https://bsky.app/profile/chiefgyk3d.com" title="Bluesky"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/bluesky.svg" width="32" height="32" alt="Bluesky"/></a></td>
+    <td align="center"><a href="http://twitch.tv/chiefgyk3d" title="Twitch"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/twitch.svg" width="32" height="32" alt="Twitch"/></a></td>
+    <td align="center"><a href="https://www.youtube.com/channel/UCvFY4KyqVBuYd7JAl3NRyiQ" title="YouTube"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/youtube.svg" width="32" height="32" alt="YouTube"/></a></td>
+    <td align="center"><a href="https://kick.com/chiefgyk3d" title="Kick"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/kick.svg" width="32" height="32" alt="Kick"/></a></td>
+    <td align="center"><a href="https://www.tiktok.com/@chiefgyk3d" title="TikTok"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/tiktok.svg" width="32" height="32" alt="TikTok"/></a></td>
+    <td align="center"><a href="https://discord.chiefgyk3d.com" title="Discord"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/discord.svg" width="32" height="32" alt="Discord"/></a></td>
+    <td align="center"><a href="https://matrix-invite.chiefgyk3d.com" title="Matrix"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/matrix.svg" width="32" height="32" alt="Matrix"/></a></td>
+  </tr>
+  <tr>
+    <td align="center">Mastodon</td>
+    <td align="center">Bluesky</td>
+    <td align="center">Twitch</td>
+    <td align="center">YouTube</td>
+    <td align="center">Kick</td>
+    <td align="center">TikTok</td>
+    <td align="center">Discord</td>
+    <td align="center">Matrix</td>
+  </tr>
+</table>
+
 **⚡ FrankenLLM: Because one GPU is never enough! ⚡**
+
+</div>

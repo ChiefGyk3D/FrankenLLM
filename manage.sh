@@ -1,7 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # FrankenLLM - Main Service Management Launcher
-# Stitched-together GPUs, but it lives!
-#
 # Auto-detects local or remote and runs the appropriate manager
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

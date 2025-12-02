@@ -16,45 +16,68 @@ ACTION="${1:-status}"
 case $ACTION in
   start)
     echo "Starting Ollama services on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl start ollama-gpu0 ollama-gpu1"
+    echo ""
+    echo "To start services, run these commands on the server:"
+    echo "  ssh $FRANKEN_SERVER_IP"
+    echo "  sudo systemctl start ollama-gpu0 ollama-gpu1"
+    echo ""
+    echo "Or run this one-liner:"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl start ollama-gpu0 ollama-gpu1'"
     ;;
   stop)
     echo "Stopping Ollama services on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl stop ollama-gpu0 ollama-gpu1"
+    echo ""
+    echo "To stop services, run these commands on the server:"
+    echo "  ssh $FRANKEN_SERVER_IP"
+    echo "  sudo systemctl stop ollama-gpu0 ollama-gpu1"
+    echo ""
+    echo "Or run this one-liner:"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl stop ollama-gpu0 ollama-gpu1'"
     ;;
   restart)
     echo "Restarting Ollama services on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl restart ollama-gpu0 ollama-gpu1"
+    echo ""
+    echo "To restart services, run these commands on the server:"
+    echo "  ssh $FRANKEN_SERVER_IP"
+    echo "  sudo systemctl restart ollama-gpu0 ollama-gpu1"
+    echo ""
+    echo "Or run this one-liner:"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl restart ollama-gpu0 ollama-gpu1'"
     ;;
   status)
     echo "=== Ollama Service Status on $FRANKEN_SERVER_IP ==="
     echo ""
-    ssh -t "$FRANKEN_SERVER_IP" << 'ENDSSH'
-echo "GPU 0 - Port 11434:"
-sudo systemctl status ollama-gpu0 --no-pager -l | head -15
-echo ""
-echo "GPU 1 - Port 11435:"
-sudo systemctl status ollama-gpu1 --no-pager -l | head -15
-ENDSSH
+    echo "Note: Using health check instead of systemctl (no sudo needed)"
+    echo ""
+    "$SCRIPT_DIR/../bin/health-check.sh"
+    echo ""
+    echo "For detailed systemctl status, SSH into the server and run:"
+    echo "  ssh $FRANKEN_SERVER_IP"
+    echo "  sudo systemctl status ollama-gpu0 ollama-gpu1"
     ;;
   logs)
     echo "=== Ollama Logs on $FRANKEN_SERVER_IP ==="
     echo ""
-    ssh -t "$FRANKEN_SERVER_IP" << 'ENDSSH'
-echo "GPU 0:"
-sudo journalctl -u ollama-gpu0 -n 30 --no-pager
-echo ""
-echo "GPU 1:"
-sudo journalctl -u ollama-gpu1 -n 30 --no-pager
-ENDSSH
+    echo "To view logs, run these commands on the server:"
+    echo "  ssh $FRANKEN_SERVER_IP"
+    echo "  sudo journalctl -u ollama-gpu0 -n 30"
+    echo "  sudo journalctl -u ollama-gpu1 -n 30"
+    echo ""
+    echo "Or run these one-liners:"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo journalctl -u ollama-gpu0 -n 30'"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo journalctl -u ollama-gpu1 -n 30'"
     ;;
   enable)
     echo "Enabling Ollama services on boot on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl enable ollama-gpu0 ollama-gpu1"
+    echo ""
+    echo "To enable services on boot, run:"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl enable ollama-gpu0 ollama-gpu1'"
     ;;
   disable)
     echo "Disabling Ollama services on boot on $FRANKEN_SERVER_IP..."
-    ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl disable ollama-gpu0 ollama-gpu1"
+    echo ""
+    echo "To disable services on boot, run:"
+    echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl disable ollama-gpu0 ollama-gpu1'"
     ;;
   *)
     echo "FrankenLLM - Remote Service Management"

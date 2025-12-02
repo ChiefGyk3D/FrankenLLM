@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # FrankenLLM - Pull the same model on both GPUs
 # Stitched-together GPUs, but it lives!
 

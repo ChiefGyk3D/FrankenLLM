@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # FrankenLLM - Check GPU configuration
 # Stitched-together GPUs, but it lives!
 

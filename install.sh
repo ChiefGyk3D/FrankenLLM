@@ -1,7 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # FrankenLLM - Main Installation Launcher
-# Stitched-together GPUs, but it lives!
-#
 # Auto-detects local or remote installation and runs the appropriate installer
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

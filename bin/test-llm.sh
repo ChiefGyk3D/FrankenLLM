@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # FrankenLLM - Test both LLM servers
 # Stitched-together GPUs, but it lives!
 
