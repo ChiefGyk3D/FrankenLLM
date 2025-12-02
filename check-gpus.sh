@@ -22,4 +22,4 @@ franken_exec "nvidia-smi"
 echo ""
 
 echo "4. Docker availability:"
-franken_exec "docker --version 2>/dev/null && docker-compose --version 2>/dev/null || echo 'Docker not installed'"
+franken_exec "if command -v docker &> /dev/null; then docker --version; docker-compose --version 2>/dev/null || echo 'docker-compose not installed'; else echo 'Docker not installed'; fi"
