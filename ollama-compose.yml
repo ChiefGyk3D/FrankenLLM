@@ -1,0 +1,47 @@
+version: '3.8'
+
+# FrankenLLM - Alternative configuration using Ollama (easiest to use)
+# Stitched-together GPUs, but it lives!
+
+services:
+  ollama-gpu0-5060ti:
+    image: ollama/ollama:latest
+    container_name: ollama-5060ti
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - OLLAMA_HOST=0.0.0.0:11434
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-5060ti-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  ollama-gpu1-3050:
+    image: ollama/ollama:latest
+    container_name: ollama-3050
+    environment:
+      - CUDA_VISIBLE_DEVICES=1
+      - OLLAMA_HOST=0.0.0.0:11435
+    ports:
+      - "11435:11435"
+    volumes:
+      - ollama-3050-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  ollama-5060ti-data:
+  ollama-3050-data:
