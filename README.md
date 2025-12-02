@@ -177,17 +177,150 @@ docker-compose up -d
 
 ## Model Recommendations
 
-### RTX 5060 Ti (16GB VRAM)
-- `llama3.2` (8B parameters)
-- `mistral` (7B parameters)
-- `llama3:8b-instruct-q4_0` (4-bit quantized)
-- `codellama:13b` (with quantization)
+### For 16GB VRAM (RTX 5060 Ti) - Larger Models
 
-### RTX 3050 (8GB VRAM)
-- `llama3.2:1b` (1B parameters)
-- `llama3.2:3b` (3B parameters)
-- `phi3` (3.8B parameters)
-- `gemma:2b` (2B parameters)
+**Best General Purpose Models:**
+- `llama3.2` (8B parameters) - Excellent general-purpose model, great balance
+- `llama3.1:8b` (8B parameters) - Newer version with improved capabilities
+- `mistral:7b-instruct` (7B parameters) - Fast and efficient, great for chat
+- `gemma2:9b` (9B parameters) - **Google's Gemma 2, excellent quality**
+- `qwen2.5:7b` (7B parameters) - Strong multilingual and coding
+
+**Specialized Models:**
+- `codellama:13b` (13B, quantized) - Best for code generation
+- `llama3.2-vision:11b` (11B) - Multimodal with vision capabilities
+- `deepseek-coder:6.7b` (6.7B) - Excellent for coding tasks
+- `mixtral:8x7b` (47B MoE, heavily quantized) - Mixture of Experts model
+
+**Google Gemma Options (Recommended!):**
+- `gemma3:12b` - **NEWEST! Gemma 3 (March 2025) - Perfect for 16GB!**
+- `gemma2:9b` - Gemma 2, fits perfectly in 16GB
+- `gemma:7b` - Original Gemma, very capable
+
+### For 8GB VRAM (RTX 3050) - Efficient Models
+
+**Best Lightweight Models:**
+- `llama3.2:3b` (3B parameters) - Surprisingly capable for its size
+- `gemma2:2b` (2B parameters) - **Google's Gemma 2, great for 8GB**
+- `phi3:3.8b` (3.8B) - Microsoft's efficient model, excellent reasoning
+- `qwen2.5:3b` (3B) - Strong performance, good for multiple languages
+
+**Smallest but Capable:**
+- `llama3.2:1b` (1B parameters) - Fast responses, basic tasks
+- `gemma:2b` (2B parameters) - Original Gemma, very efficient
+- `tinyllama` (1.1B) - Ultra-fast, good for simple tasks
+- `phi3:mini` (3.8B) - Same as phi3 but optimized
+
+**Google Gemma Options (Recommended!):**
+- `gemma3:4b` - **NEWEST! Gemma 3 (March 2025) - Perfect for 8GB!**
+- `gemma3:1b` - Gemma 3 ultra-fast
+- `gemma2:2b` - Gemma 2, best quality for 8GB
+- `gemma:2b` - Original, still excellent
+
+### Recommended Dual-GPU Setup
+
+**Strategy 1: All Gemma 3 - Latest! (BEST CHOICE)**
+- GPU 0 (16GB): `gemma3:12b` - **NEWEST Gemma 3 with vision support**
+- GPU 1 (8GB): `gemma3:4b` - **NEWEST Gemma 3, perfect fit**
+
+**Strategy 1b: Gemma 3 Fast Combo**
+- GPU 0 (16GB): `gemma3:12b` - Main multimodal workload
+- GPU 1 (8GB): `gemma3:1b` - Ultra-fast responses
+
+**Strategy 1c: Gemma 2 (Stable)**
+- GPU 0 (16GB): `gemma2:9b` - General purpose and chat
+- GPU 1 (8GB): `gemma2:2b` - Quick tasks and testing
+
+**Strategy 2: Code + General**
+- GPU 0 (16GB): `codellama:13b` or `deepseek-coder:6.7b` - Coding
+- GPU 1 (8GB): `phi3:3.8b` - General tasks and reasoning
+
+**Strategy 3: All Gemma 2 (Stable, Well-Tested)**
+- GPU 0 (16GB): `gemma2:9b` - Main workload
+- GPU 1 (8GB): `gemma2:2b` - Fast responses
+
+**Strategy 4: Power User**
+- GPU 0 (16GB): `llama3.2` or `mistral:7b-instruct` - Main LLM
+- GPU 1 (8GB): `llama3.2:3b` - Same family, faster responses
+
+### Quick Pull Commands
+
+For 16GB GPU (pull on GPU 0):
+```bash
+# Google Gemma 3 12B - NEWEST! Perfect fit for 16GB
+OLLAMA_HOST=http://localhost:11434 ollama pull gemma3:12b
+
+# Google Gemma 2 (stable, well-tested)
+OLLAMA_HOST=http://localhost:11434 ollama pull gemma2:9b
+
+# Or remotely
+ssh YOUR_SERVER "OLLAMA_HOST=http://localhost:11434 ollama pull gemma3:12b"
+
+# Other great options
+ollama pull llama3.2
+ollama pull mistral:7b-instruct
+ollama pull codellama:13b
+```
+
+For 8GB GPU (pull on GPU 1):
+```bash
+# Google Gemma 3 4B - NEWEST! Perfect fit for 8GB
+OLLAMA_HOST=http://localhost:11435 ollama pull gemma3:4b
+
+# Google Gemma 3 1B - Ultra-fast
+OLLAMA_HOST=http://localhost:11435 ollama pull gemma3:1b
+
+# Google Gemma 2 (stable, well-tested)
+OLLAMA_HOST=http://localhost:11435 ollama pull gemma2:2b
+
+# Or remotely
+ssh YOUR_SERVER "OLLAMA_HOST=http://localhost:11435 ollama pull gemma3:4b"
+
+# Other great options
+ollama pull llama3.2:3b
+ollama pull phi3:3.8b
+```
+
+Or use the script to pull different models on each GPU:
+```bash
+# Latest Gemma 3 - PERFECT FIT! (12B + 4B)
+./pull-dual-models.sh gemma3:12b gemma3:4b
+
+# Latest Gemma 3 - Fast combo (12B + 1B)
+./pull-dual-models.sh gemma3:12b gemma3:1b
+
+# Stable Gemma 2
+./pull-dual-models.sh gemma2:9b gemma2:2b
+
+# Same model on both GPUs
+./pull-model.sh gemma3:12b
+```
+
+### Performance Tips
+
+**For 16GB GPU (RTX 5060 Ti):**
+- **Gemma3:12b** is the perfect fit with multimodal support
+- 7-12B models run smoothly with full context (4K-8K tokens)
+- Can handle up to 13B models with quantization
+
+**For 8GB GPU (RTX 3050):**
+- **Gemma3:4b** is the sweet spot - newer and more capable
+- 2-4B models are ideal
+- Keep context window to 2K-4K tokens for best performance
+
+**Gemma Models Advantages:**
+- Trained by Google DeepMind
+- Excellent instruction following
+- Strong reasoning capabilities
+- Open weights and commercial-friendly license
+- **Gemma 3 (March 2025):** 
+  - Multimodal with vision support (can process images!)
+  - 128K context length
+  - Improved architecture with sliding window attention
+  - Available in: 270M, **1B, 4B, 12B**, 27B
+  - **Gemma3:12b and Gemma3:4b are PERFECT for your GPUs!**
+- Gemma 2: Better performance than original Gemma
+- Progressive improvements across versions
 
 ## Troubleshooting
 
