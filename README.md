@@ -4,7 +4,7 @@
 
 Multi-GPU LLM Server Setup
 
-Server: **192.168.201.145**
+Server: **192.168.201.x** (local testnet)
 
 ## GPU Configuration
 - **GPU 0**: NVIDIA GeForce RTX 5060 Ti (16GB VRAM)
