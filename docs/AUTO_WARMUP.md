@@ -2,7 +2,32 @@
 
 ## Overview
 
-FrankenLLM includes an automatic warmup service that loads your configured models into GPU memory after system boot. This ensures your models are ready to use immediately without manual warmup.
+FrankenLLM includes an automatic warmup service that loads your configured models into GPU memory after system boot. Combined with `OLLAMA_KEEP_ALIVE=-1`, this ensures your models stay loaded indefinitely and are ready to use immediately.
+
+## Important: Keep-Alive Configuration
+
+By default, Ollama **unloads models after 5 minutes of inactivity** to free VRAM. To keep models permanently loaded:
+
+### New Installations (v1.1.0+)
+
+New installations automatically include `OLLAMA_KEEP_ALIVE=-1` in the systemd service files. No action needed!
+
+### Existing Installations (Upgrade from v1.0.x)
+
+Run this script to enable keep-alive on your existing services:
+
+```bash
+./bin/enable-keep-alive.sh
+```
+
+This will:
+- Add `OLLAMA_KEEP_ALIVE=-1` to both Ollama services
+- Reload systemd and restart services
+- Keep models loaded indefinitely after warmup
+
+**Without keep-alive enabled**: Models load on boot but unload after 5 minutes idle → first query after idle period will be slow
+
+**With keep-alive enabled**: Models load on boot and stay loaded forever → all queries are instant
 
 ## How It Works
 

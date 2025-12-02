@@ -308,17 +308,32 @@ sudo systemctl status ollama-gpu1
 
 ### Slow first response / health check lag
 
-**Problem**: First API call is slow (10-30 seconds), but subsequent calls are instant.
+**Problem**: First API call is slow (10-30 seconds), or queries become slow after a few minutes of inactivity.
 
-**Cause**: Models aren't loaded into GPU memory yet. The first call triggers loading.
+**Cause**: 
+1. Models aren't loaded into GPU memory yet (first call triggers loading)
+2. Ollama unloads idle models after 5 minutes by default
 
-**Solution**: Use the warmup script to pre-load models:
+**Solution**: 
+
+**Step 1 - Enable Keep-Alive** (keeps models loaded indefinitely):
+
+```bash
+# For existing installations
+./bin/enable-keep-alive.sh
+
+# New installations (v1.1.0+) have this enabled automatically
+```
+
+**Step 2 - Warmup Models** (loads models into memory):
 
 ```bash
 ./bin/warmup-models.sh
 ```
 
 For automatic warmup on boot, see [Auto-Warmup Guide](docs/AUTO_WARMUP.md).
+
+> 💡 **Why both?** Keep-alive prevents unloading, warmup loads models on boot. Together they ensure instant responses 24/7.
 
 ### Models not responding
 

@@ -61,6 +61,7 @@ Type=simple
 User=$USER
 Environment="CUDA_VISIBLE_DEVICES=0"
 Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_KEEP_ALIVE=-1"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3
@@ -82,6 +83,7 @@ Type=simple
 User=$USER
 Environment="CUDA_VISIBLE_DEVICES=1"
 Environment="OLLAMA_HOST=0.0.0.0:11435"
+Environment="OLLAMA_KEEP_ALIVE=-1"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3
