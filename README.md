@@ -33,11 +33,11 @@ Run separate LLM models on each of your NVIDIA GPUs simultaneously. Perfect for 
 
 ```
 FrankenLLM/
-├── 🚀 setup-frankenllm.sh  # ⭐ NEW! Complete interactive installer
-├── configure.sh            # ⚙️  Configuration wizard (manual mode)
-├── install.sh              # � Main installer (auto-detects local/remote)
-├── manage.sh               # 🎛️  Main service manager
-├── config.sh               # 📝 Configuration loader
+├── 🚀 setup-frankenllm.sh  # ⭐ RECOMMENDED! Complete interactive installer
+├── ⚙️  configure.sh         # Manual mode: Step 1 - Create .env config
+├── 🔧 install.sh            # Manual mode: Step 2 - Run installation
+├── 🎛️  manage.sh            # Day-to-day: Start/stop/restart/logs
+├── 📝 config.sh             # Internal: Configuration loader
 ├── .env.example            # 📋 Configuration template
 │
 ├── bin/                    # 🔧 Core utilities (12 tools)
@@ -72,6 +72,9 @@ FrankenLLM/
 │
 ├── docs/                   # 📚 Complete documentation
 │   ├── README.md           #    Full documentation
+│   ├── WORKFLOWS.md        #    Super Installer vs Manual Mode
+│   ├── GETTING_STARTED.md  #    Complete setup guide
+│   ├── SUPER_INSTALLER.md  #    setup-frankenllm.sh guide
 │   ├── CONFIGURATION.md    #    Configuration options
 │   ├── AUTO_WARMUP.md      #    Auto-warmup setup guide
 │   ├── OPEN_WEBUI.md       #    Web UI + N8n integration
@@ -87,7 +90,22 @@ FrankenLLM/
 
 ## 🚀 Quick Start
 
-### ⚡ Complete Setup (Recommended - One Command Does Everything!)
+### 🤔 Choose Your Workflow
+
+| Feature | 🚀 Super Installer | 🛠️ Manual Mode |
+|---------|-------------------|-----------------|
+| **Command** | `./setup-frankenllm.sh` | `./configure.sh` → `./install.sh` |
+| **Best For** | Most users, fresh installs | Advanced users, automation |
+| **Detects Existing** | ✅ Docker, Ollama, services | ❌ Overwrites |
+| **Sudo Caching** | ✅ Enter password once | ❌ Multiple prompts |
+| **Flexible GPUs** | ✅ Auto-detects 1+ GPUs | ✅ Manual configuration |
+| **Reinstall Options** | ✅ Keep/upgrade/skip | ❌ Always reinstalls |
+| **Interactive** | ✅ Guided wizard | ✅ Step-by-step |
+| **Config Review** | ⚠️ No (immediate install) | ✅ Edit `.env` before install |
+
+---
+
+### ⚡ Complete Setup (Recommended - Super Installer)
 
 **For first-time installation or complete setup:**
 
@@ -133,7 +151,13 @@ cd FrankenLLM
 
 ### 🛠️ Manual Setup (Advanced Users)
 
-If you prefer step-by-step control:
+**Why use manual mode?**
+- Need to configure `.env` without installing yet
+- Want to review configuration before installation
+- Integrating with existing automation/scripts
+- Prefer traditional two-step workflow
+
+**Manual workflow:**
 
 #### 1. Configure Your Environment
 
@@ -146,6 +170,8 @@ This creates a `.env` file with:
 - GPU ports (default: 11434, 11435)
 - GPU names (optional)
 
+> **Note:** You can edit `.env` manually after creation for fine-tuned control.
+
 #### 2. Install Ollama Services
 
 ```bash
@@ -156,6 +182,8 @@ Auto-detects local or remote from your configuration and:
 - Installs Ollama
 - Creates systemd services for each GPU
 - Starts and enables services
+
+> **Note:** Unlike `setup-frankenllm.sh`, this won't detect existing installations or cache sudo password.
 
 #### 3. Pull Models
 
@@ -540,6 +568,7 @@ Complete documentation is available in the [`docs/`](docs/) directory:
 
 ### 📘 Getting Started
 
+- **[Installation Workflows](docs/WORKFLOWS.md)** - 🔀 Choose between Super Installer vs Manual Mode
 - **[Getting Started Guide](docs/GETTING_STARTED.md)** - 🚀 Complete setup guide for new users
 - **[Super Installer Guide](docs/SUPER_INSTALLER.md)** - ⚡ Using the one-command installer
 
