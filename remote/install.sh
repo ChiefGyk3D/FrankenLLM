@@ -163,6 +163,7 @@ if [ "$GPU_COUNT" -ge 2 ]; then
     echo "  - GPU 1: http://0.0.0.0:$GPU1_PORT"
 fi
 echo ""
+echo "⚠️  Note: Auto-warmup service will be configured from your local machine."
 echo "Check status: sudo systemctl status ollama-gpu0 ollama-gpu1"
 ENDSCRIPT
 
@@ -189,6 +190,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Test connection: ./bin/health-check.sh"
 echo "  2. Pull models: ./bin/pull-dual-models.sh gemma3:12b gemma3:4b"
-echo "  3. Test LLMs: ./bin/test-llm.sh"
+echo "  3. Setup auto-warmup: ./remote/setup-warmup.sh"
+echo "  4. Test LLMs: ./bin/test-llm.sh"
 echo ""
 echo "Manage services: ./remote/manage.sh {start|stop|restart|status}"

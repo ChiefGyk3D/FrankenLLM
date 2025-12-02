@@ -109,6 +109,32 @@ if [ "$GPU_COUNT" -ge 2 ]; then
     sudo systemctl enable ollama-gpu1
 fi
 
+# Create warmup service
+echo "Creating warmup service for auto-loading models on boot..."
+INSTALL_DIR="$SCRIPT_DIR/.."
+sudo tee /etc/systemd/system/frankenllm-warmup.service > /dev/null << EOF
+[Unit]
+Description=FrankenLLM Model Warmup
+After=ollama-gpu0.service ollama-gpu1.service
+Wants=ollama-gpu0.service ollama-gpu1.service
+
+[Service]
+Type=oneshot
+User=$USER
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/bin/warmup-on-boot.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "Enabling warmup service..."
+sudo systemctl daemon-reload
+sudo systemctl enable frankenllm-warmup.service
+
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║                Installation Complete! ✅                    ║"
@@ -128,7 +154,11 @@ if [ "$GPU_COUNT" -ge 2 ]; then
     echo "  - GPU 1: http://localhost:11435"
 fi
 echo ""
+echo "Auto-warmup on boot: ✅ ENABLED"
+echo "Models will automatically load into GPU memory after system restart"
+echo ""
 echo "Next steps:"
 echo "  1. Run: ./local/manage.sh status"
 echo "  2. Pull models: ./bin/pull-dual-models.sh gemma3:12b gemma3:4b"
-echo "  3. Test: ./bin/test-llm.sh"
+echo "  3. Test warmup now: ./bin/warmup-models.sh"
+echo "  4. Test queries: ./bin/test-llm.sh"
