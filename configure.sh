@@ -59,38 +59,60 @@ fi
 # Port configuration
 echo ""
 echo "4. Port Configuration"
-read -p "Enter port for GPU 0 [11434]: " GPU0_PORT
-GPU0_PORT=${GPU0_PORT:-11434}
+declare -A GPU_PORTS
+declare -A GPU_NAMES
+declare -A GPU_MODELS
 
-if [ "$GPU_COUNT" -ge 2 ]; then
-    read -p "Enter port for GPU 1 [11435]: " GPU1_PORT
-    GPU1_PORT=${GPU1_PORT:-11435}
-fi
+for i in $(seq 0 $(($GPU_COUNT - 1))); do
+    default_port=$((11434 + i))
+    
+    if [ $i -eq 0 ]; then
+        default_name="RTX 5060 Ti"
+        default_model="gemma3:12b"
+    elif [ $i -eq 1 ]; then
+        default_name="RTX 3050"
+        default_model="gemma3:4b"
+    else
+        default_name="GPU $i"
+        default_model="gemma3:4b"
+    fi
+    
+    read -p "Enter port for GPU $i [$default_port]: " port
+    GPU_PORTS[$i]=${port:-$default_port}
+done
 
 # GPU names
 echo ""
 echo "5. GPU Names (for display purposes)"
-read -p "Enter name for GPU 0 [RTX 5060 Ti]: " GPU0_NAME
-GPU0_NAME=${GPU0_NAME:-RTX 5060 Ti}
-
-if [ "$GPU_COUNT" -ge 2 ]; then
-    read -p "Enter name for GPU 1 [RTX 3050]: " GPU1_NAME
-    GPU1_NAME=${GPU1_NAME:-RTX 3050}
-fi
+for i in $(seq 0 $(($GPU_COUNT - 1))); do
+    if [ $i -eq 0 ]; then
+        default_name="RTX 5060 Ti"
+    elif [ $i -eq 1 ]; then
+        default_name="RTX 3050"
+    else
+        default_name="GPU $i"
+    fi
+    
+    read -p "Enter name for GPU $i [$default_name]: " name
+    GPU_NAMES[$i]=${name:-$default_name}
+done
 
 # Model configuration
 echo ""
 echo "6. Model Configuration"
 echo "   Specify which models to use on each GPU"
-echo "   Leave blank to use defaults (gemma3:12b for GPU 0, gemma3:4b for GPU 1)"
+echo "   Leave blank to use defaults"
 echo ""
-read -p "Model for GPU 0 [gemma3:12b]: " GPU0_MODEL
-GPU0_MODEL=${GPU0_MODEL:-gemma3:12b}
-
-if [ "$GPU_COUNT" -ge 2 ]; then
-    read -p "Model for GPU 1 [gemma3:4b]: " GPU1_MODEL
-    GPU1_MODEL=${GPU1_MODEL:-gemma3:4b}
-fi
+for i in $(seq 0 $(($GPU_COUNT - 1))); do
+    if [ $i -eq 0 ]; then
+        default_model="gemma3:12b"
+    else
+        default_model="gemma3:4b"
+    fi
+    
+    read -p "Model for GPU $i [$default_model]: " model
+    GPU_MODELS[$i]=${model:-$default_model}
+done
 
 # Write configuration
 cat > .env << EOF
@@ -105,17 +127,29 @@ FRANKEN_INSTALL_DIR=$INSTALL_DIR
 FRANKEN_GPU_COUNT=$GPU_COUNT
 
 # Port Configuration
-FRANKEN_GPU0_PORT=$GPU0_PORT
-FRANKEN_GPU1_PORT=${GPU1_PORT:-11435}
+EOF
+
+for i in $(seq 0 $(($GPU_COUNT - 1))); do
+    echo "FRANKEN_GPU${i}_PORT=${GPU_PORTS[$i]}" >> .env
+done
+
+cat >> .env << EOF
 
 # GPU Names
-FRANKEN_GPU0_NAME=$GPU0_NAME
-FRANKEN_GPU1_NAME=${GPU1_NAME:-RTX 3050}
+EOF
+
+for i in $(seq 0 $(($GPU_COUNT - 1))); do
+    echo "FRANKEN_GPU${i}_NAME=\"${GPU_NAMES[$i]}\"" >> .env
+done
+
+cat >> .env << EOF
 
 # Model Configuration
-FRANKEN_GPU0_MODEL=$GPU0_MODEL
-FRANKEN_GPU1_MODEL=${GPU1_MODEL:-gemma3:4b}
 EOF
+
+for i in $(seq 0 $(($GPU_COUNT - 1))); do
+    echo "FRANKEN_GPU${i}_MODEL=${GPU_MODELS[$i]}" >> .env
+done
 
 echo ""
 echo "✓ Configuration saved to .env"
@@ -125,10 +159,9 @@ echo "--------"
 echo "Server:        $SERVER_IP"
 echo "Install Dir:   $INSTALL_DIR"
 echo "GPU Count:     $GPU_COUNT"
-echo "GPU 0:         $GPU0_NAME (port $GPU0_PORT, model: $GPU0_MODEL)"
-if [ "$GPU_COUNT" -ge 2 ]; then
-    echo "GPU 1:         $GPU1_NAME (port $GPU1_PORT, model: $GPU1_MODEL)"
-fi
+for i in $(seq 0 $(($GPU_COUNT - 1))); do
+    echo "GPU $i:         ${GPU_NAMES[$i]} (port ${GPU_PORTS[$i]}, model: ${GPU_MODELS[$i]})"
+done
 echo ""
 echo "To apply this configuration, all scripts will automatically load .env"
 echo "You can also manually export these variables or edit .env directly."
