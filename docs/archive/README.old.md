@@ -1,7 +1,7 @@
 # 🧟 FrankenLLM
 
 <div align="center">
-  <img src="media/banner.png" alt="FrankenLLM Banner" width="600"/>
+  <img src="../media/banner.png" alt="FrankenLLM Banner" width="600"/>
 </div>
 
 **Stitched-together GPUs, but it lives!**
@@ -23,119 +23,40 @@ Run separate LLM models on each of your NVIDIA GPUs simultaneously. Perfect for 
 - 🔧 **Easy Management** - Simple scripts for installation, service control, and testing
 - 🌐 **Local & Remote** - Works on localhost or remote servers via SSH
 - ⚙️ **Systemd Services** - Automatic startup, monitoring, and restart on failure
-- 🔥 **Auto-Warmup** - Models automatically load into GPU memory on boot
-- ⚡ **Configurable** - Support for 1+ GPUs with flexible model selection
-- 🖥️ **Headless Ready** - Designed for Ubuntu Server 24.04 (tested with Linux 6.14 + NVIDIA 580 drivers)
 
 ---
 
 ## 📁 Project Structure
 
 ```
-FrankenLLM/
-├── 🚀 setup-frankenllm.sh  # ⭐ NEW! Complete interactive installer
-├── configure.sh            # ⚙️  Configuration wizard (manual mode)
-├── install.sh              # � Main installer (auto-detects local/remote)
+frankenllm/
+├── install.sh              # 🚀 Main installer (auto-detects local/remote)
 ├── manage.sh               # 🎛️  Main service manager
+├── configure.sh            # ⚙️  Configuration wizard
 ├── config.sh               # 📝 Configuration loader
 ├── .env.example            # 📋 Configuration template
 │
-├── bin/                    # 🔧 Core utilities (12 tools)
-│   ├── check-gpus.sh       #    GPU status & utilization
-│   ├── health-check.sh     #    Service connectivity test
-│   ├── chat.sh             #    Interactive CLI chat
-│   ├── test-connection.sh  #    Connection test + chat option
-│   ├── test-llm.sh         #    Test with specific query
-│   ├── pull-model.sh       #    Pull same model (all GPUs)
-│   ├── pull-dual-models.sh #    Pull different models (per GPU)
-│   ├── warmup-models.sh    #    Pre-load models into VRAM
-│   ├── warmup-on-boot.sh   #    Boot warmup service script
-│   ├── enable-keep-alive.sh #   Keep models in VRAM forever
-│   ├── install-webui.sh    #    Install Open WebUI locally
-│   └── manage-webui.sh     #    Manage Open WebUI locally
+├── bin/                    # 🔧 Core utilities
+│   ├── check-gpus.sh       #    Check GPU configuration
+│   ├── health-check.sh     #    Test service connectivity
+│   ├── pull-model.sh       #    Pull same model on both GPUs
+│   ├── pull-dual-models.sh #    Pull different models per GPU
+│   └── test-llm.sh         #    Test both LLMs with a query
 │
-├── local/                  # 💻 Local installation
+├── local/                  # 💻 Local installation scripts
 │   ├── install.sh          #    Install on THIS machine
 │   └── manage.sh           #    Manage local services
 │
-├── remote/                 # 🌐 Remote installation (via SSH)
-│   ├── install.sh          #    Install on remote server
-│   ├── manage.sh           #    Manage remote services
-│   ├── service-control.sh  #    Remote service control
-│   ├── setup-warmup.sh     #    Configure auto-warmup remotely
-│   ├── install-webui.sh    #    Install Open WebUI remotely
-│   └── manage-webui.sh     #    Manage remote Open WebUI
-│
-├── scripts/                # 📦 Installation components
-│   ├── install-docker.sh   #    Docker + NVIDIA Container Toolkit
-│   └── install-ollama-native.sh # Native Ollama installation
-│
-├── docs/                   # 📚 Complete documentation
-│   ├── README.md           #    Full documentation
-│   ├── CONFIGURATION.md    #    Configuration options
-│   ├── AUTO_WARMUP.md      #    Auto-warmup setup guide
-│   ├── OPEN_WEBUI.md       #    Web UI + N8n integration
-│   ├── QUICKSTART.md       #    Command reference
-│   ├── REMOTE_MANAGEMENT.md #   Remote server guide
-│   └── archive/            #    Historical documentation
-│
-└── archive/                # 🗂️  Old scripts (reference only)
-    └── old-root-scripts/   #    Previous versions
+└── remote/                 # 🌐 Remote installation scripts
+    ├── install.sh          #    Install on remote server via SSH
+    └── manage.sh           #    Manage remote services via SSH
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### ⚡ Complete Setup (Recommended - One Command Does Everything!)
-
-**For first-time installation or complete setup:**
-
-```bash
-git clone https://github.com/ChiefGyk3D/FrankenLLM.git
-cd FrankenLLM
-./setup-frankenllm.sh
-```
-
-**This intelligent wizard handles:**
-
-🔍 **Smart Detection:**
-- Detects existing Docker, Ollama, services
-- Offers upgrade/reinstall/skip options
-- Works with 1, 2, or more GPUs flexibly
-
-📦 **Complete Installation:**
-- ✅ Docker (detects if already installed)
-- ✅ Ollama per-GPU services (with systemd)
-- ✅ Open WebUI (optional web interface)
-- ✅ Auto-warmup on boot (optional, instant queries)
-- ✅ Model downloads (optional, during setup)
-
-🎯 **User-Friendly Features:**
-- Caches sudo password (enter once!)
-- Color-coded progress
-- Works local OR remote (via SSH)
-- Handles reinstalls gracefully
-
-⚙️ **Auto-Start on Boot:**
-- Ollama services: Enabled automatically
-- Open WebUI: Enabled automatically
-- Model warmup: Optional (50s total boot time)
-
-**Perfect for:**
-- 🆕 Fresh Ubuntu Server 24.04 setups
-- 🔄 Upgrading existing installations
-- 🎮 Dedicated LLM servers (2+ GPUs)
-- 🏠 Home lab multi-GPU machines
-- 🌐 Remote server deployments
-
----
-
-### 🛠️ Manual Setup (Advanced Users)
-
-If you prefer step-by-step control:
-
-#### 1. Configure Your Environment
+### 1. Configure Your Environment
 
 ```bash
 ./configure.sh
@@ -146,7 +67,7 @@ This creates a `.env` file with:
 - GPU ports (default: 11434, 11435)
 - GPU names (optional)
 
-#### 2. Install Ollama Services
+### 2. Install Ollama Services
 
 ```bash
 ./install.sh
@@ -157,7 +78,7 @@ Auto-detects local or remote from your configuration and:
 - Creates systemd services for each GPU
 - Starts and enables services
 
-#### 3. Pull Models
+### 3. Pull Models
 
 ```bash
 # Pull different models optimized for each GPU
@@ -167,16 +88,7 @@ Auto-detects local or remote from your configuration and:
 ./bin/pull-model.sh gemma2:9b
 ```
 
-#### 4. Pre-warm Models (Optional but Recommended)
-
-```bash
-# Load models into GPU memory for instant responses
-./bin/warmup-models.sh
-```
-
-> 💡 For automatic warmup on boot, see the [Auto-Warmup Guide](docs/AUTO_WARMUP.md)
-
-#### 5. Test Your Setup
+### 4. Test Your Setup
 
 ```bash
 ./bin/health-check.sh
@@ -186,30 +98,6 @@ Auto-detects local or remote from your configuration and:
 ---
 
 ## 📊 Recommended Models
-
-### For 32GB+ GPU (e.g., RTX 4090, RTX 6000 Ada, A6000)
-
-**Flagship Models:**
-- `gemma3:27b` - ⭐ **Google's largest Gemma!** Multimodal, 128K context
-- `llama3.1:70b-instruct-q4_0` - Meta's most capable (quantized to fit)
-- `qwen2.5:32b` - Alibaba's powerful multilingual model
-- `mixtral:8x7b` - Mixture of experts, excellent performance
-
-**Coding Specialists:**
-- `deepseek-coder:33b-instruct` - Top-tier code generation
-- `codellama:34b` - Meta's code specialist
-
-### For 24GB GPU (e.g., RTX 4090, RTX 3090, A5000)
-
-**Premium Models:**
-- `gemma3:27b` - ⭐ **FITS PERFECTLY!** Google's flagship multimodal
-- `llama3.1:45b-instruct-q4_0` - High capability (quantized)
-- `qwen2.5:14b` - Excellent reasoning and multilingual
-- `deepseek-coder:33b-instruct-q4_0` - Professional code generation
-
-**Balanced Options:**
-- `mistral:22b` - Great all-rounder
-- `solar:10.7b` - Efficient and powerful
 
 ### For 16GB GPU (e.g., RTX 5060 Ti, RTX 4060 Ti)
 
@@ -239,22 +127,12 @@ Auto-detects local or remote from your configuration and:
 
 ### 🎯 Recommended Combos
 
-**High-End Setup (32GB + 24GB):**
-```bash
-./bin/pull-dual-models.sh llama3.1:70b-instruct-q4_0 gemma3:27b
-```
-
-**Premium Dual 24GB:**
-```bash
-./bin/pull-dual-models.sh gemma3:27b qwen2.5:14b
-```
-
-**All Gemma 3 (16GB + 8GB):**
+**All Gemma 3 (Latest!):**
 ```bash
 ./bin/pull-dual-models.sh gemma3:12b gemma3:4b
 ```
 
-**Fast Combo (16GB + 8GB):**
+**Fast Combo:**
 ```bash
 ./bin/pull-dual-models.sh gemma3:12b gemma3:1b
 ```
@@ -267,11 +145,6 @@ Auto-detects local or remote from your configuration and:
 **Code + General:**
 ```bash
 ./bin/pull-dual-models.sh codellama:13b llama3.2:3b
-```
-
-**Three GPU Setup (24GB + 16GB + 8GB):**
-```bash
-./bin/pull-dual-models.sh gemma3:27b gemma3:12b gemma3:4b
 ```
 
 ---
@@ -297,54 +170,14 @@ Auto-detects local or remote from your configuration and:
 ./manage.sh disable
 ```
 
-### Interactive Chat
+### Health Monitoring
 
 ```bash
-# Start interactive chat session
-./bin/chat.sh
-
-# Features:
-# - Select which GPU to use
-# - Choose from available models
-# - Real-time conversation
-# - Commands: 'quit', 'exit', 'clear', 'info'
-```
-
-### Testing & Monitoring
-
-```bash
-# Test connections and optionally chat with both GPUs
-./bin/test-connection.sh
-
-# Test both LLMs with a specific query
-./bin/test-llm.sh "Your question here"
-
 # Quick health check (no sudo required)
 ./bin/health-check.sh
 
 # Detailed GPU information
 ./bin/check-gpus.sh
-```
-
-### Open WebUI (Web Interface)
-
-```bash
-# Install Open WebUI
-./bin/install-webui.sh
-
-# Access at http://localhost:3000
-# - ChatGPT-like web interface
-# - Multi-GPU support (add both Ollama instances)
-# - OpenAI-compatible API for N8n, LangChain, etc.
-# - User accounts, chat history, RAG, and more
-
-# Manage Open WebUI
-./bin/manage-webui.sh start    # Start
-./bin/manage-webui.sh status   # Check status
-./bin/manage-webui.sh logs     # View logs
-./bin/manage-webui.sh update   # Update to latest
-
-# See docs/OPEN_WEBUI.md for full guide
 ```
 
 ### Using the APIs
@@ -408,6 +241,7 @@ Run `./configure.sh` for an interactive setup wizard that will guide you through
 ### Customizing for Your Setup
 
 The configuration is flexible and supports:
+
 - **1 or more GPUs**: Set `FRANKEN_GPU_COUNT` to match your hardware
 - **Custom models**: Choose any Ollama-compatible model for each GPU
 - **Different GPU sizes**: Optimize model selection based on VRAM
@@ -416,18 +250,21 @@ The configuration is flexible and supports:
 Example configurations:
 
 **Single GPU Setup:**
+
 ```bash
 FRANKEN_GPU_COUNT=1
 FRANKEN_GPU0_MODEL="gemma3:12b"
 ```
 
 **Different Model Families:**
+
 ```bash
 FRANKEN_GPU0_MODEL="llama3.2"      # Meta's Llama on GPU 0
 FRANKEN_GPU1_MODEL="mistral:7b"    # Mistral on GPU 1
 ```
 
 **Code-focused Setup:**
+
 ```bash
 FRANKEN_GPU0_MODEL="codellama:13b"
 FRANKEN_GPU1_MODEL="deepseek-coder:6.7b"
@@ -452,35 +289,6 @@ sudo systemctl status ollama-gpu0
 sudo systemctl status ollama-gpu1
 ```
 
-### Slow first response / health check lag
-
-**Problem**: First API call is slow (10-30 seconds), or queries become slow after a few minutes of inactivity.
-
-**Cause**: 
-1. Models aren't loaded into GPU memory yet (first call triggers loading)
-2. Ollama unloads idle models after 5 minutes by default
-
-**Solution**: 
-
-**Step 1 - Enable Keep-Alive** (keeps models loaded indefinitely):
-
-```bash
-# For existing installations
-./bin/enable-keep-alive.sh
-
-# New installations (v1.1.0+) have this enabled automatically
-```
-
-**Step 2 - Warmup Models** (loads models into memory):
-
-```bash
-./bin/warmup-models.sh
-```
-
-For automatic warmup on boot, see [Auto-Warmup Guide](docs/AUTO_WARMUP.md).
-
-> 💡 **Why both?** Keep-alive prevents unloading, warmup loads models on boot. Together they ensure instant responses 24/7.
-
 ### Models not responding
 
 ```bash
@@ -491,10 +299,7 @@ For automatic warmup on boot, see [Auto-Warmup Guide](docs/AUTO_WARMUP.md).
 curl http://YOUR_IP:11434/api/tags
 curl http://YOUR_IP:11435/api/tags
 
-# Warm up models
-./bin/warmup-models.sh
-
-# Restart services if needed
+# Restart services
 ./manage.sh restart
 ```
 
@@ -534,49 +339,16 @@ Found a bug? Want to add a feature? PRs welcome!
 
 ---
 
-## 📚 Documentation
-
-Complete documentation is available in the [`docs/`](docs/) directory:
-
-### 📘 Getting Started
-
-- **[Getting Started Guide](docs/GETTING_STARTED.md)** - 🚀 Complete setup guide for new users
-- **[Super Installer Guide](docs/SUPER_INSTALLER.md)** - ⚡ Using the one-command installer
-
-### 📚 Core Guides
-
-- **[Configuration Guide](docs/CONFIGURATION.md)** - ⚙️ Complete configuration reference with examples
-- **[Auto-Warmup Setup](docs/AUTO_WARMUP.md)** - 🔥 Keep models loaded and ready on boot
-- **[Open WebUI Integration](docs/OPEN_WEBUI.md)** - 🌐 Web interface and N8n automation
-- **[Remote Management](docs/REMOTE_MANAGEMENT.md)** - 🌐 SSH and remote server setup
-- **[Quick Start Reference](docs/QUICKSTART.md)** - ⚡ Fast command reference
-
-### 📋 Additional Resources
-
-- **[Full Documentation](docs/README.md)** - Complete documentation with all features
-- **[Q&A Document](docs/QUESTIONS_ANSWERED.md)** - Common questions answered
-- **[Historical Docs](docs/archive/)** - Past troubleshooting and reorganization notes
-
-### Quick Links
-
-- 🚀 **[Getting Started](#-quick-start)**
-- 🎯 **[Recommended Models](#-recommended-models)**
-- 🎮 **[Usage Guide](#-usage)**
-- 🔧 **[Configuration](#️-configuration)**
-- 🔍 **[Troubleshooting](#-troubleshooting)**
-
----
-
 ## 🆘 Support
 
 If you encounter any issues or have questions:
 
-1. **Check Documentation**: Review the docs in [`docs/`](docs/) directory
+1. **Check Documentation**: Review all guides in the [`docs/`](./) directory
 2. **GPU Detection**: Run `./bin/check-gpus.sh` to verify GPU configuration
 3. **Health Check**: Use `./bin/health-check.sh` to verify services are online
 4. **Service Logs**: Check logs with `./manage.sh logs` (external terminal)
 5. **Model Issues**: Run `./bin/warmup-models.sh` to pre-load correct models
-6. **SSH Problems**: See [Remote Management Guide](docs/REMOTE_MANAGEMENT.md)
+6. **SSH Problems**: See [Remote Management Guide](REMOTE_MANAGEMENT.md)
 7. **Open an Issue**: If problems persist, [open a GitHub issue](https://github.com/ChiefGyk3D/FrankenLLM/issues)
 
 ---
@@ -584,10 +356,9 @@ If you encounter any issues or have questions:
 ## 📜 License
 
 This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
-If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+If a copy of the MPL was not distributed with this file, You can obtain one at <https://mozilla.org/MPL/2.0/>.
 
 SPDX-License-Identifier: MPL-2.0
-
 ---
 
 ## 🙏 Credits
@@ -608,7 +379,7 @@ If you find FrankenLLM useful, consider supporting development:
   <table>
     <tr>
       <td align="center"><a href="https://patreon.com/chiefgyk3d?utm_medium=unknown&utm_source=join_link&utm_campaign=creatorshare_creator&utm_content=copyLink" title="Patreon"><img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/patreon.svg" width="32" height="32" alt="Patreon"/></a></td>
-      <td align="center"><a href="https://streamelements.com/chiefgyk3d/tip" title="StreamElements"><img src="media/streamelements.png" width="32" height="32" alt="StreamElements"/></a></td>
+      <td align="center"><a href="https://streamelements.com/chiefgyk3d/tip" title="StreamElements"><img src="../media/streamelements.png" width="32" height="32" alt="StreamElements"/></a></td>
     </tr>
     <tr>
       <td align="center">Patreon</td>
@@ -681,5 +452,7 @@ Made with ❤️ by [ChiefGyk3D](https://github.com/ChiefGyk3D)
     <td align="center">Matrix</td>
   </tr>
 </table>
+
+**⚡ FrankenLLM: Because one GPU is never enough! ⚡**
 
 </div>

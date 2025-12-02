@@ -1,11 +1,10 @@
 #!/bin/bash
-# FrankenLLM - Native installation without Docker - using Ollama binary
+# FrankenLLM - Install Ollama natively (not in Docker)
 # Stitched-together GPUs, but it lives!
 
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/config.sh"
-
+source "$SCRIPT_DIR/../config.sh"
 echo "=== FrankenLLM: Installing Ollama (Native) on $FRANKEN_SERVER_IP ==="
 echo ""
 

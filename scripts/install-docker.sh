@@ -1,10 +1,10 @@
 #!/bin/bash
-# FrankenLLM - Install Docker and NVIDIA Container Toolkit on remote server
+# FrankenLLM - Install Docker and NVIDIA Container Toolkit
 # Stitched-together GPUs, but it lives!
 
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/config.sh"
+source "$SCRIPT_DIR/../config.sh"
 
 echo "=== FrankenLLM: Installing Docker and NVIDIA Container Toolkit on $FRANKEN_SERVER_IP ==="
 echo ""
