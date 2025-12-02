@@ -8,10 +8,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
 
 echo "=== FrankenLLM Health Check ==="
+echo "GPU Count: $FRANKEN_GPU_COUNT"
 echo ""
 
 # Check GPU 0
 echo "GPU 0 ($FRANKEN_GPU0_NAME) - http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT"
+echo "  Preferred model: $FRANKEN_GPU0_MODEL"
 RESPONSE_0=$(curl -s -m 5 "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT/api/tags" 2>&1)
 if echo "$RESPONSE_0" | grep -q "models"; then
     echo "  ✅ ONLINE"
@@ -27,19 +29,21 @@ fi
 
 echo ""
 
-# Check GPU 1
-echo "GPU 1 ($FRANKEN_GPU1_NAME) - http://$FRANKEN_SERVER_IP:$FRANKEN_GPU1_PORT"
-RESPONSE_1=$(curl -s -m 5 "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU1_PORT/api/tags" 2>&1)
-if echo "$RESPONSE_1" | grep -q "models"; then
-    echo "  ✅ ONLINE"
-    MODEL_COUNT_1=$(echo "$RESPONSE_1" | grep -o '"name"' | wc -l)
-    echo "  📦 Models installed: $MODEL_COUNT_1"
-    if [ $MODEL_COUNT_1 -gt 0 ]; then
-        echo "  Models:"
-        echo "$RESPONSE_1" | grep -o '"name":"[^"]*"' | sed 's/"name":"//g' | sed 's/"//g' | sed 's/^/    - /'
+# Check GPU 1 if configured
+if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+    echo "GPU 1 ($FRANKEN_GPU1_NAME) - http://$FRANKEN_SERVER_IP:$FRANKEN_GPU1_PORT"
+    echo "  Preferred model: $FRANKEN_GPU1_MODEL"
+    RESPONSE_1=$(curl -s -m 5 "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU1_PORT/api/tags" 2>&1)
+    if echo "$RESPONSE_1" | grep -q "models"; then
+        echo "  ✅ ONLINE"
+        MODEL_COUNT_1=$(echo "$RESPONSE_1" | grep -o '"name"' | wc -l)
+        echo "  📦 Models installed: $MODEL_COUNT_1"
+        if [ $MODEL_COUNT_1 -gt 0 ]; then
+            echo "  Models:"
+            echo "$RESPONSE_1" | grep -o '"name":"[^"]*"' | sed 's/"name":"//g' | sed 's/"//g' | sed 's/^/    - /'
+        fi
+    else
+        echo "  ❌ OFFLINE or not responding"
     fi
-else
-    echo "  ❌ OFFLINE or not responding"
+    echo ""
 fi
-
-echo ""

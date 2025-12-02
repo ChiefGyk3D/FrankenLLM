@@ -1,5 +1,9 @@
 # 🧟 FrankenLLM
 
+<div align="center">
+  <img src="../media/banner.png" alt="FrankenLLM Banner" width="800"/>
+</div>
+
 **Stitched-together GPUs, but it lives!**
 
 Run separate LLM models on each of your NVIDIA GPUs simultaneously. Perfect for multi-GPU setups where you want to maximize utilization.
@@ -215,6 +219,9 @@ Configuration is stored in `.env` (create from `.env.example`):
 FRANKEN_SERVER_IP=192.168.201.145    # or "localhost" for local
 FRANKEN_INSTALL_DIR=/opt/frankenllm
 
+# GPU Configuration
+FRANKEN_GPU_COUNT=2                  # Number of GPUs (1 or more)
+
 # Port Configuration
 FRANKEN_GPU0_PORT=11434
 FRANKEN_GPU1_PORT=11435
@@ -222,9 +229,46 @@ FRANKEN_GPU1_PORT=11435
 # GPU Names (optional, for display)
 FRANKEN_GPU0_NAME="RTX 5060 Ti"
 FRANKEN_GPU1_NAME="RTX 3050"
+
+# Model Configuration
+# Specify which models to use on each GPU
+FRANKEN_GPU0_MODEL="gemma3:12b"
+FRANKEN_GPU1_MODEL="gemma3:4b"
 ```
 
-Run `./configure.sh` for an interactive setup.
+Run `./configure.sh` for an interactive setup wizard that will guide you through all options.
+
+### Customizing for Your Setup
+
+The configuration is flexible and supports:
+
+- **1 or more GPUs**: Set `FRANKEN_GPU_COUNT` to match your hardware
+- **Custom models**: Choose any Ollama-compatible model for each GPU
+- **Different GPU sizes**: Optimize model selection based on VRAM
+- **Local or remote**: Works on localhost or over SSH
+
+Example configurations:
+
+**Single GPU Setup:**
+
+```bash
+FRANKEN_GPU_COUNT=1
+FRANKEN_GPU0_MODEL="gemma3:12b"
+```
+
+**Different Model Families:**
+
+```bash
+FRANKEN_GPU0_MODEL="llama3.2"      # Meta's Llama on GPU 0
+FRANKEN_GPU1_MODEL="mistral:7b"    # Mistral on GPU 1
+```
+
+**Code-focused Setup:**
+
+```bash
+FRANKEN_GPU0_MODEL="codellama:13b"
+FRANKEN_GPU1_MODEL="deepseek-coder:6.7b"
+```
 
 ---
 

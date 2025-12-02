@@ -19,6 +19,9 @@ export FRANKEN_SERVER_IP="${FRANKEN_SERVER_IP:-192.168.201.145}"
 # Installation directory on the target server
 export FRANKEN_INSTALL_DIR="${FRANKEN_INSTALL_DIR:-/opt/frankenllm}"
 
+# GPU Count
+export FRANKEN_GPU_COUNT="${FRANKEN_GPU_COUNT:-2}"
+
 # Port configuration
 export FRANKEN_GPU0_PORT="${FRANKEN_GPU0_PORT:-11434}"
 export FRANKEN_GPU1_PORT="${FRANKEN_GPU1_PORT:-11435}"
@@ -26,6 +29,10 @@ export FRANKEN_GPU1_PORT="${FRANKEN_GPU1_PORT:-11435}"
 # GPU configuration
 export FRANKEN_GPU0_NAME="${FRANKEN_GPU0_NAME:-RTX 5060 Ti}"
 export FRANKEN_GPU1_NAME="${FRANKEN_GPU1_NAME:-RTX 3050}"
+
+# Model configuration
+export FRANKEN_GPU0_MODEL="${FRANKEN_GPU0_MODEL:-gemma3:12b}"
+export FRANKEN_GPU1_MODEL="${FRANKEN_GPU1_MODEL:-gemma3:4b}"
 
 # Detect if we're installing locally or remotely
 if [[ "$FRANKEN_SERVER_IP" == "localhost" || "$FRANKEN_SERVER_IP" == "127.0.0.1" ]]; then
