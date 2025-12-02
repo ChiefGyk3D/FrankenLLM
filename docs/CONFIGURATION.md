@@ -163,32 +163,45 @@ FRANKEN_GPU2_MODEL="gemma3:4b"
 
 ## Recommended Models by VRAM
 
-### 24GB VRAM
-- `gemma3:27b` - Largest Gemma 3 model
-- `llama3.2:70b` - Meta's flagship (quantized)
+### 32GB+ VRAM
+- `llama3.1:70b-instruct-q4_0` ⭐ **Meta's flagship** - Top capability
+- `gemma3:27b` - Google's largest, multimodal
+- `qwen2.5:32b` - Excellent reasoning
 - `mixtral:8x7b` - Mixture of experts
+- `deepseek-coder:33b-instruct` - Premium code generation
+
+### 24GB VRAM
+- `gemma3:27b` ⭐ **Recommended** - Largest Gemma 3, perfect fit
+- `llama3.1:45b-instruct-q4_0` - High capability quantized
+- `qwen2.5:14b` - Excellent multilingual
+- `deepseek-coder:33b-instruct-q4_0` - Professional coding
+- `mistral:22b` - Great all-rounder
 
 ### 16GB VRAM
 - `gemma3:12b` ⭐ **Recommended** - Perfect fit
 - `gemma2:9b` - Stable alternative
 - `codellama:13b` - For programming
 - `llama3.2` - General purpose
+- `mistral:7b-instruct` - Great for instructions
 
 ### 12GB VRAM
 - `gemma3:12b` - Fits with some room
 - `mistral:7b-instruct` - Great performance
 - `llama3.2:7b` - Good all-rounder
+- `deepseek-coder:6.7b` - Coding specialist
 
 ### 8GB VRAM
 - `gemma3:4b` ⭐ **Recommended** - Perfect fit
 - `gemma2:2b` - Smaller, faster
 - `phi3:3.8b` - Microsoft's efficient model
 - `llama3.2:3b` - Compact Llama
+- `qwen:4b` - Good multilingual
 
 ### 6GB VRAM
 - `gemma3:1b` - Ultra-fast
 - `gemma2:2b` - Good quality
 - `phi3:mini` - Very efficient
+- `tinyllama` - Extremely compact
 
 ## Workflow
 

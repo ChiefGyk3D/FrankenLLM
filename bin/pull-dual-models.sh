@@ -56,9 +56,11 @@ if [ $ACTUAL_ARGS -ne $EXPECTED_ARGS ]; then
     done
     
     echo ""
-    echo "Recommendations:"
-    echo "  16GB GPUs: gemma3:12b, gemma2:9b, llama3.2, mistral:7b-instruct, codellama:13b"
-    echo "  8GB GPUs:  gemma3:4b, gemma3:1b, gemma2:2b, llama3.2:3b, phi3:3.8b"
+    echo "Model Recommendations by VRAM:"
+    echo "  32GB+ GPUs: gemma3:27b, llama3.1:70b-instruct-q4_0, qwen2.5:32b, mixtral:8x7b"
+    echo "  24GB GPUs:  gemma3:27b, llama3.1:45b-instruct-q4_0, qwen2.5:14b, deepseek-coder:33b-instruct-q4_0"
+    echo "  16GB GPUs:  gemma3:12b, gemma2:9b, llama3.2, mistral:7b-instruct, codellama:13b"
+    echo "  8GB GPUs:   gemma3:4b, gemma3:1b, gemma2:2b, llama3.2:3b, phi3:3.8b"
     exit 1
 fi
 

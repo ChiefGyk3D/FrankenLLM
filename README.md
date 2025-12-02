@@ -120,6 +120,30 @@ Auto-detects local or remote from your configuration and:
 
 ## 📊 Recommended Models
 
+### For 32GB+ GPU (e.g., RTX 4090, RTX 6000 Ada, A6000)
+
+**Flagship Models:**
+- `gemma3:27b` - ⭐ **Google's largest Gemma!** Multimodal, 128K context
+- `llama3.1:70b-instruct-q4_0` - Meta's most capable (quantized to fit)
+- `qwen2.5:32b` - Alibaba's powerful multilingual model
+- `mixtral:8x7b` - Mixture of experts, excellent performance
+
+**Coding Specialists:**
+- `deepseek-coder:33b-instruct` - Top-tier code generation
+- `codellama:34b` - Meta's code specialist
+
+### For 24GB GPU (e.g., RTX 4090, RTX 3090, A5000)
+
+**Premium Models:**
+- `gemma3:27b` - ⭐ **FITS PERFECTLY!** Google's flagship multimodal
+- `llama3.1:45b-instruct-q4_0` - High capability (quantized)
+- `qwen2.5:14b` - Excellent reasoning and multilingual
+- `deepseek-coder:33b-instruct-q4_0` - Professional code generation
+
+**Balanced Options:**
+- `mistral:22b` - Great all-rounder
+- `solar:10.7b` - Efficient and powerful
+
 ### For 16GB GPU (e.g., RTX 5060 Ti, RTX 4060 Ti)
 
 **Google Gemma 3 (Newest! March 2025):**
@@ -148,12 +172,22 @@ Auto-detects local or remote from your configuration and:
 
 ### 🎯 Recommended Combos
 
-**All Gemma 3 (Latest!):**
+**High-End Setup (32GB + 24GB):**
+```bash
+./bin/pull-dual-models.sh llama3.1:70b-instruct-q4_0 gemma3:27b
+```
+
+**Premium Dual 24GB:**
+```bash
+./bin/pull-dual-models.sh gemma3:27b qwen2.5:14b
+```
+
+**All Gemma 3 (16GB + 8GB):**
 ```bash
 ./bin/pull-dual-models.sh gemma3:12b gemma3:4b
 ```
 
-**Fast Combo:**
+**Fast Combo (16GB + 8GB):**
 ```bash
 ./bin/pull-dual-models.sh gemma3:12b gemma3:1b
 ```
@@ -166,6 +200,11 @@ Auto-detects local or remote from your configuration and:
 **Code + General:**
 ```bash
 ./bin/pull-dual-models.sh codellama:13b llama3.2:3b
+```
+
+**Three GPU Setup (24GB + 16GB + 8GB):**
+```bash
+./bin/pull-dual-models.sh gemma3:27b gemma3:12b gemma3:4b
 ```
 
 ---
