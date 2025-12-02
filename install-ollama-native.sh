@@ -2,26 +2,29 @@
 # FrankenLLM - Native installation without Docker - using Ollama binary
 # Stitched-together GPUs, but it lives!
 
-SERVER_IP="192.168.201.145"
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/config.sh"
 
-echo "=== FrankenLLM: Installing Ollama (Native) on $SERVER_IP ==="
+echo "=== FrankenLLM: Installing Ollama (Native) on $FRANKEN_SERVER_IP ==="
 echo ""
 
-ssh $SERVER_IP 'bash -s' << 'ENDSSH'
+# Prepare the installation script
+INSTALL_SCRIPT=$(cat << 'ENDSSH'
 # Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Create systemd service for GPU 0 (5060 Ti)
-sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null << 'EOF'
+# Create systemd service for GPU 0
+sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null << EOF
 [Unit]
-Description=Ollama Service for GPU 0 (RTX 5060 Ti)
+Description=Ollama Service for GPU 0 ($FRANKEN_GPU0_NAME)
 After=network-online.target
 
 [Service]
 Type=simple
-User=chiefgyk3d
+User=$USER
 Environment="CUDA_VISIBLE_DEVICES=0"
-Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_HOST=0.0.0.0:$FRANKEN_GPU0_PORT"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3
@@ -30,17 +33,17 @@ RestartSec=3
 WantedBy=default.target
 EOF
 
-# Create systemd service for GPU 1 (3050)
-sudo tee /etc/systemd/system/ollama-gpu1.service > /dev/null << 'EOF'
+# Create systemd service for GPU 1
+sudo tee /etc/systemd/system/ollama-gpu1.service > /dev/null << EOF
 [Unit]
-Description=Ollama Service for GPU 1 (RTX 3050)
+Description=Ollama Service for GPU 1 ($FRANKEN_GPU1_NAME)
 After=network-online.target
 
 [Service]
 Type=simple
-User=chiefgyk3d
+User=$USER
 Environment="CUDA_VISIBLE_DEVICES=1"
-Environment="OLLAMA_HOST=0.0.0.0:11435"
+Environment="OLLAMA_HOST=0.0.0.0:$FRANKEN_GPU1_PORT"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3
@@ -62,9 +65,21 @@ echo "To enable on boot:"
 echo "  sudo systemctl enable ollama-gpu0"
 echo "  sudo systemctl enable ollama-gpu1"
 ENDSSH
+)
+
+# Execute the installation script
+if [ "$FRANKEN_IS_LOCAL" = true ]; then
+    echo "Installing locally..."
+    eval "$INSTALL_SCRIPT"
+else
+    echo "Installing on remote server $FRANKEN_SERVER_IP..."
+    ssh "$FRANKEN_SERVER_IP" "FRANKEN_GPU0_PORT=$FRANKEN_GPU0_PORT FRANKEN_GPU1_PORT=$FRANKEN_GPU1_PORT FRANKEN_GPU0_NAME='$FRANKEN_GPU0_NAME' FRANKEN_GPU1_NAME='$FRANKEN_GPU1_NAME' bash -s" << EOF
+$INSTALL_SCRIPT
+EOF
+fi
 
 echo ""
 echo "=== Installation Complete ==="
 echo "Services available at:"
-echo "  - RTX 5060 Ti: http://$SERVER_IP:11434"
-echo "  - RTX 3050:    http://$SERVER_IP:11435"
+echo "  - $FRANKEN_GPU0_NAME: http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT"
+echo "  - $FRANKEN_GPU1_NAME: http://$FRANKEN_SERVER_IP:$FRANKEN_GPU1_PORT"

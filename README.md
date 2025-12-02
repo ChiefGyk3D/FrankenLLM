@@ -2,11 +2,45 @@
 
 **Stitched-together GPUs, but it lives!**
 
-Multi-GPU LLM Server Setup
+Multi-GPU LLM Server Setup - Works locally or remotely via SSH
 
-Server: **192.168.201.x** (local testnet)
+## Configuration
 
-## GPU Configuration
+FrankenLLM is now fully configurable! You can install it locally or on a remote server.
+
+### Quick Configure
+
+Run the interactive configuration wizard:
+
+```bash
+./configure.sh
+```
+
+This will create a `.env` file with your settings:
+- Server IP (localhost for local, or remote IP like 192.168.201.145)
+- Installation directory
+- Port numbers for each GPU
+- GPU names
+
+### Manual Configuration
+
+Alternatively, create a `.env` file manually or set environment variables:
+
+```bash
+# For local installation
+export FRANKEN_SERVER_IP=localhost
+
+# For remote installation
+export FRANKEN_SERVER_IP=192.168.201.145
+
+# Optional: customize ports and names
+export FRANKEN_GPU0_PORT=11434
+export FRANKEN_GPU1_PORT=11435
+export FRANKEN_GPU0_NAME="RTX 5060 Ti"
+export FRANKEN_GPU1_NAME="RTX 3050"
+```
+
+## GPU Configuration (Example)
 - **GPU 0**: NVIDIA GeForce RTX 5060 Ti (16GB VRAM)
 - **GPU 1**: NVIDIA GeForce RTX 3050 (8GB VRAM)
 - **Driver**: 580.95.05
@@ -14,38 +48,60 @@ Server: **192.168.201.x** (local testnet)
 
 ## Quick Start (Recommended - Native Ollama)
 
-Since Docker isn't installed, the easiest approach is to use native Ollama:
+### 1. Configure FrankenLLM
+```bash
+./configure.sh
+```
 
-### 1. Install Ollama on both GPUs
+### 2. Check GPU Configuration
+```bash
+./check-gpus.sh
+```
+
+### 3. Install Ollama on both GPUs
 ```bash
 ./install-ollama-native.sh
 ```
 
 This creates two systemd services:
-- `ollama-gpu0` - RTX 5060 Ti on port **11434**
-- `ollama-gpu1` - RTX 3050 on port **11435**
+- `ollama-gpu0` - GPU 0 on configured port (default: 11434)
+- `ollama-gpu1` - GPU 1 on configured port (default: 11435)
 
-### 2. Start the services
+### 4. Start the services
 ```bash
 ./manage-services.sh start
 ```
 
-### 3. Enable services on boot (optional)
+### 5. Enable services on boot (optional)
 ```bash
 ./manage-services.sh enable
 ```
 
-### 4. Pull a model on both GPUs
+### 6. Pull a model on both GPUs
 ```bash
 ./pull-model.sh llama3.2
 ```
 
 Available models: `llama3.2`, `llama3.2:1b`, `mistral`, `codellama`, `phi3`, etc.
 
-### 5. Test the servers
+### 7. Test the servers
 ```bash
 ./test-llm.sh "Write a hello world in Python"
 ```
+
+## Installation Modes
+
+FrankenLLM automatically detects whether you're installing locally or remotely:
+
+### Local Installation
+- Set `FRANKEN_SERVER_IP=localhost` or run `./configure.sh` and select local
+- All commands run directly on your machine
+- No SSH required
+
+### Remote Installation
+- Set `FRANKEN_SERVER_IP=192.168.201.145` (or your server IP)
+- All commands execute via SSH
+- Requires SSH access to the remote server
 
 ## Management Commands
 
@@ -71,31 +127,36 @@ Available models: `llama3.2`, `llama3.2:1b`, `mistral`, `codellama`, `phi3`, etc
 
 ## API Endpoints
 
-### GPU 0 (RTX 5060 Ti) - Port 11434
+The endpoints will be available at your configured server IP and ports.
+
+### GPU 0 - Port (default: 11434)
 ```bash
-# List models
-curl http://192.168.201.145:11434/api/tags
+# List models (replace SERVER_IP with your configured IP)
+curl http://SERVER_IP:11434/api/tags
 
 # Generate response
-curl -X POST http://192.168.201.145:11434/api/generate -d '{
+curl -X POST http://SERVER_IP:11434/api/generate -d '{
   "model": "llama3.2",
   "prompt": "Why is the sky blue?",
   "stream": false
 }'
 ```
 
-### GPU 1 (RTX 3050) - Port 11435
+### GPU 1 - Port (default: 11435)
 ```bash
 # List models
-curl http://192.168.201.145:11435/api/tags
+curl http://SERVER_IP:11435/api/tags
 
 # Generate response
-curl -X POST http://192.168.201.145:11435/api/generate -d '{
+curl -X POST http://SERVER_IP:11435/api/generate -d '{
   "model": "llama3.2",
   "prompt": "Why is the sky blue?",
   "stream": false
 }'
 ```
+
+For local installations, use `localhost` as SERVER_IP.
+For remote installations, use your configured IP (e.g., `192.168.201.145`).
 
 ## Alternative: Docker Installation
 
@@ -130,31 +191,52 @@ docker-compose up -d
 
 ## Troubleshooting
 
+All scripts automatically work with your configured server (local or remote).
+
 ### Check GPU usage
 ```bash
-ssh 192.168.201.145 "nvidia-smi"
+./check-gpus.sh
 ```
 
-### Check if ports are listening
+### View service logs
 ```bash
-ssh 192.168.201.145 "ss -tlnp | grep -E '11434|11435'"
+./manage-services.sh logs
 ```
 
-### View detailed logs
+### Check service status
 ```bash
-ssh 192.168.201.145 "sudo journalctl -u ollama-gpu0 -f"
-ssh 192.168.201.145 "sudo journalctl -u ollama-gpu1 -f"
+./manage-services.sh status
 ```
+
+### Manual commands (if needed)
+For remote servers:
+```bash
+ssh YOUR_SERVER_IP "nvidia-smi"
+ssh YOUR_SERVER_IP "ss -tlnp | grep -E 'PORT1|PORT2'"
+ssh YOUR_SERVER_IP "sudo journalctl -u ollama-gpu0 -f"
+```
+
+For local installations, run commands directly without SSH.
 
 ## Files Overview
 
+### Configuration
+- `configure.sh` - Interactive configuration wizard (creates .env)
+- `config.sh` - Configuration loader (auto-loaded by all scripts)
+- `.env` - Your configuration file (created by configure.sh)
+
+### Installation Scripts
 - `install-ollama-native.sh` - Install Ollama natively (recommended)
 - `install-docker.sh` - Install Docker + NVIDIA Container Toolkit
-- `manage-services.sh` - Control Ollama services
-- `pull-model.sh` - Download models on both GPUs
-- `test-llm.sh` - Test both servers
-- `check-gpus.sh` - Verify GPU configuration
 - `deploy.sh` - Deploy Docker configuration
+
+### Management Scripts
+- `manage-services.sh` - Control Ollama services (start/stop/restart/status/logs)
+- `pull-model.sh` - Download models on both GPUs
+- `test-llm.sh` - Test both servers with a prompt
+- `check-gpus.sh` - Verify GPU configuration
+
+### Docker Compose Files
 - `docker-compose.yml` - llama.cpp Docker config
 - `vllm-compose.yml` - vLLM Docker config
 - `ollama-compose.yml` - Ollama Docker config

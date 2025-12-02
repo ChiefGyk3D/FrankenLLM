@@ -29,7 +29,9 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Configuration (contains server IPs and settings)
+.env
+
 # Secrets
 *.pem
 *.key
-.env

@@ -2,22 +2,24 @@
 # FrankenLLM - Check GPU configuration on remote server
 # Stitched-together GPUs, but it lives!
 
-SERVER_IP="192.168.201.145"
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/config.sh"
 
-echo "=== FrankenLLM: Checking GPU Configuration on $SERVER_IP ==="
+echo "=== FrankenLLM: Checking GPU Configuration on $FRANKEN_SERVER_IP ==="
 echo ""
 
 echo "1. GPU List:"
-ssh $SERVER_IP "nvidia-smi --list-gpus"
+franken_exec "nvidia-smi --list-gpus"
 echo ""
 
 echo "2. Detailed GPU Info:"
-ssh $SERVER_IP "nvidia-smi --query-gpu=index,name,memory.total,memory.free,driver_version,cuda_version --format=csv,noheader"
+franken_exec "nvidia-smi --query-gpu=index,name,memory.total,memory.free,driver_version --format=csv,noheader"
 echo ""
 
 echo "3. Full nvidia-smi output:"
-ssh $SERVER_IP "nvidia-smi"
+franken_exec "nvidia-smi"
 echo ""
 
 echo "4. Docker availability:"
-ssh $SERVER_IP "docker --version && docker-compose --version"
+franken_exec "docker --version 2>/dev/null && docker-compose --version 2>/dev/null || echo 'Docker not installed'"

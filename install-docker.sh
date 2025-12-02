@@ -2,14 +2,15 @@
 # FrankenLLM - Install Docker and NVIDIA Container Toolkit on remote server
 # Stitched-together GPUs, but it lives!
 
-SERVER_IP="192.168.201.145"
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/config.sh"
 
-echo "=== FrankenLLM: Installing Docker and NVIDIA Container Toolkit on $SERVER_IP ==="
+echo "=== FrankenLLM: Installing Docker and NVIDIA Container Toolkit on $FRANKEN_SERVER_IP ==="
 echo ""
 
-# Install Docker
-echo "Installing Docker..."
-ssh $SERVER_IP 'bash -s' << 'ENDSSH'
+# Prepare the installation script
+DOCKER_INSTALL_SCRIPT=$(cat << 'ENDSSH'
 # Update package index
 sudo apt-get update
 
@@ -48,7 +49,23 @@ echo ""
 echo "Docker and NVIDIA Container Toolkit installed!"
 echo "Please log out and log back in for group changes to take effect."
 ENDSSH
+)
+
+# Execute the installation script
+if [ "$FRANKEN_IS_LOCAL" = true ]; then
+    echo "Installing Docker locally..."
+    eval "$DOCKER_INSTALL_SCRIPT"
+else
+    echo "Installing Docker on remote server $FRANKEN_SERVER_IP..."
+    ssh "$FRANKEN_SERVER_IP" 'bash -s' << EOF
+$DOCKER_INSTALL_SCRIPT
+EOF
+fi
 
 echo ""
 echo "=== Installation Complete ==="
-echo "You may need to log out and back in to the remote server."
+if [ "$FRANKEN_IS_LOCAL" = false ]; then
+    echo "You may need to log out and back in to the remote server."
+else
+    echo "You may need to log out and back in to apply group changes."
+fi
