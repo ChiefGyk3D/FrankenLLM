@@ -16,6 +16,7 @@ if curl -s "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT/api/tags" > /dev/null 2
     MODELS_GPU0=$(curl -s "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT/api/tags" | grep -o '"name":"[^"]*"' | sed 's/"name":"//g' | sed 's/"//g' | tr '\n' ', ' | sed 's/,$//')
     if [ -n "$MODELS_GPU0" ]; then
         echo "✅ GPU 0 responding with models: $MODELS_GPU0"
+        GPU0_MODEL=$(echo "$MODELS_GPU0" | cut -d',' -f1)
     else
         echo "⚠️  GPU 0 responding but no models loaded"
     fi
@@ -32,6 +33,7 @@ if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
         MODELS_GPU1=$(curl -s "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU1_PORT/api/tags" | grep -o '"name":"[^"]*"' | sed 's/"name":"//g' | sed 's/"//g' | tr '\n' ', ' | sed 's/,$//')
         if [ -n "$MODELS_GPU1" ]; then
             echo "✅ GPU 1 responding with models: $MODELS_GPU1"
+            GPU1_MODEL=$(echo "$MODELS_GPU1" | cut -d',' -f1)
         else
             echo "⚠️  GPU 1 responding but no models loaded"
         fi
@@ -74,6 +76,64 @@ if [ -n "$GPU0_FAIL" ] || [ -n "$GPU1_FAIL" ]; then
         echo "   ./remote/manage.sh status"
     fi
     exit 1
-else
-    echo "✅ All configured servers responding!"
+fi
+
+echo "✅ All configured servers responding!"
+echo ""
+
+# Interactive test prompt
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Would you like to test with a prompt? (y/n)"
+read -r response
+
+if [[ "$response" =~ ^[Yy]$ ]]; then
+    echo ""
+    echo "Enter your prompt (or press Enter for default):"
+    read -r user_prompt
+    
+    # Use default if empty
+    if [ -z "$user_prompt" ]; then
+        user_prompt="Hello! Please respond briefly to confirm you're working."
+    fi
+    
+    echo ""
+    echo "=== Testing LLMs with your prompt ==="
+    echo "Prompt: $user_prompt"
+    echo ""
+    
+    # Test GPU 0 if model available
+    if [ -n "$GPU0_MODEL" ]; then
+        echo "--- GPU 0 ($FRANKEN_GPU0_NAME) Response ---"
+        response=$(curl -s "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT/api/generate" -d "{
+          \"model\": \"$GPU0_MODEL\",
+          \"prompt\": \"$user_prompt\",
+          \"stream\": false
+        }" | grep -o '"response":"[^"]*"' | sed 's/"response":"//g' | sed 's/"//g' | sed 's/\\n/\n/g')
+        
+        if [ -n "$response" ]; then
+            echo "$response"
+        else
+            echo "❌ No response received"
+        fi
+        echo ""
+    fi
+    
+    # Test GPU 1 if available and model loaded
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ] && [ -n "$GPU1_MODEL" ]; then
+        echo "--- GPU 1 ($FRANKEN_GPU1_NAME) Response ---"
+        response=$(curl -s "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU1_PORT/api/generate" -d "{
+          \"model\": \"$GPU1_MODEL\",
+          \"prompt\": \"$user_prompt\",
+          \"stream\": false
+        }" | grep -o '"response":"[^"]*"' | sed 's/"response":"//g' | sed 's/"//g' | sed 's/\\n/\n/g')
+        
+        if [ -n "$response" ]; then
+            echo "$response"
+        else
+            echo "❌ No response received"
+        fi
+        echo ""
+    fi
+    
+    echo "✅ Test complete!"
 fi
