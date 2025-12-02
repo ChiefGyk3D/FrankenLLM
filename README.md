@@ -45,8 +45,12 @@ frankenllm/
 │   ├── pull-model.sh       #    Pull same model on both GPUs
 │   ├── pull-dual-models.sh #    Pull different models per GPU
 │   ├── test-llm.sh         #    Test both LLMs with a query
+│   ├── test-connection.sh  #    Test connections & optionally chat
+│   ├── chat.sh             #    Interactive chat with GPU selection
 │   ├── warmup-models.sh    #    Pre-load models into GPU memory
-│   └── warmup-on-boot.sh   #    Auto-warmup service script
+│   ├── warmup-on-boot.sh   #    Auto-warmup service script
+│   ├── install-webui.sh    #    Install Open WebUI (web interface)
+│   └── manage-webui.sh     #    Manage Open WebUI container
 │
 ├── local/                  # 💻 Local installation scripts
 │   ├── install.sh          #    Install on THIS machine
@@ -61,6 +65,7 @@ frankenllm/
     ├── README.md           #    Full documentation
     ├── CONFIGURATION.md    #    Configuration guide
     ├── AUTO_WARMUP.md      #    Auto-warmup setup
+    ├── OPEN_WEBUI.md       #    Open WebUI integration guide
     ├── QUICKSTART.md       #    Quick command reference
     └── REMOTE_MANAGEMENT.md #   Remote server guide
 ```
@@ -258,6 +263,27 @@ Auto-detects local or remote from your configuration and:
 
 # Detailed GPU information
 ./bin/check-gpus.sh
+```
+
+### Open WebUI (Web Interface)
+
+```bash
+# Install Open WebUI
+./bin/install-webui.sh
+
+# Access at http://localhost:3000
+# - ChatGPT-like web interface
+# - Multi-GPU support (add both Ollama instances)
+# - OpenAI-compatible API for N8n, LangChain, etc.
+# - User accounts, chat history, RAG, and more
+
+# Manage Open WebUI
+./bin/manage-webui.sh start    # Start
+./bin/manage-webui.sh status   # Check status
+./bin/manage-webui.sh logs     # View logs
+./bin/manage-webui.sh update   # Update to latest
+
+# See docs/OPEN_WEBUI.md for full guide
 ```
 
 ### Using the APIs
