@@ -23,6 +23,8 @@ Run separate LLM models on each of your NVIDIA GPUs simultaneously. Perfect for 
 - 🔧 **Easy Management** - Simple scripts for installation, service control, and testing
 - 🌐 **Local & Remote** - Works on localhost or remote servers via SSH
 - ⚙️ **Systemd Services** - Automatic startup, monitoring, and restart on failure
+- 🔥 **Auto-Warmup** - Models automatically load into GPU memory on boot
+- ⚡ **Configurable** - Support for 1+ GPUs with flexible model selection
 
 ---
 
@@ -41,15 +43,25 @@ frankenllm/
 │   ├── health-check.sh     #    Test service connectivity
 │   ├── pull-model.sh       #    Pull same model on both GPUs
 │   ├── pull-dual-models.sh #    Pull different models per GPU
-│   └── test-llm.sh         #    Test both LLMs with a query
+│   ├── test-llm.sh         #    Test both LLMs with a query
+│   ├── warmup-models.sh    #    Pre-load models into GPU memory
+│   └── warmup-on-boot.sh   #    Auto-warmup service script
 │
 ├── local/                  # 💻 Local installation scripts
 │   ├── install.sh          #    Install on THIS machine
 │   └── manage.sh           #    Manage local services
 │
-└── remote/                 # 🌐 Remote installation scripts
-    ├── install.sh          #    Install on remote server via SSH
-    └── manage.sh           #    Manage remote services via SSH
+├── remote/                 # 🌐 Remote installation scripts
+│   ├── install.sh          #    Install on remote server via SSH
+│   ├── manage.sh           #    Manage remote services via SSH
+│   └── setup-warmup.sh     #    Configure auto-warmup on remote
+│
+└── docs/                   # 📚 Complete documentation
+    ├── README.md           #    Full documentation
+    ├── CONFIGURATION.md    #    Configuration guide
+    ├── AUTO_WARMUP.md      #    Auto-warmup setup
+    ├── QUICKSTART.md       #    Quick command reference
+    └── REMOTE_MANAGEMENT.md #   Remote server guide
 ```
 
 ---
@@ -88,7 +100,16 @@ Auto-detects local or remote from your configuration and:
 ./bin/pull-model.sh gemma2:9b
 ```
 
-### 4. Test Your Setup
+### 4. Pre-warm Models (Optional but Recommended)
+
+```bash
+# Load models into GPU memory for instant responses
+./bin/warmup-models.sh
+```
+
+> 💡 For automatic warmup on boot, see the [Auto-Warmup Guide](docs/AUTO_WARMUP.md)
+
+### 5. Test Your Setup
 
 ```bash
 ./bin/health-check.sh
@@ -285,6 +306,20 @@ sudo systemctl status ollama-gpu0
 sudo systemctl status ollama-gpu1
 ```
 
+### Slow first response / health check lag
+
+**Problem**: First API call is slow (10-30 seconds), but subsequent calls are instant.
+
+**Cause**: Models aren't loaded into GPU memory yet. The first call triggers loading.
+
+**Solution**: Use the warmup script to pre-load models:
+
+```bash
+./bin/warmup-models.sh
+```
+
+For automatic warmup on boot, see [Auto-Warmup Guide](docs/AUTO_WARMUP.md).
+
 ### Models not responding
 
 ```bash
@@ -295,7 +330,10 @@ sudo systemctl status ollama-gpu1
 curl http://YOUR_IP:11434/api/tags
 curl http://YOUR_IP:11435/api/tags
 
-# Restart services
+# Warm up models
+./bin/warmup-models.sh
+
+# Restart services if needed
 ./manage.sh restart
 ```
 
@@ -335,18 +373,26 @@ Found a bug? Want to add a feature? PRs welcome!
 
 ---
 
-## � Documentation
+## 📚 Documentation
 
 Complete documentation is available in the [`docs/`](docs/) directory:
 
+### Core Guides
+
+- **[Configuration Guide](docs/CONFIGURATION.md)** - ⚙️ Complete configuration reference with examples
+- **[Auto-Warmup Setup](docs/AUTO_WARMUP.md)** - 🔥 Keep models loaded and ready on boot
+- **[Remote Management](docs/REMOTE_MANAGEMENT.md)** - 🌐 SSH and remote server setup
+- **[Quick Start](docs/QUICKSTART.md)** - ⚡ Fast command reference
+
+### Additional Resources
+
 - **[Full README](docs/README.md)** - Complete documentation with all features
-- **[Quick Start](docs/QUICKSTART.md)** - Fast command reference
-- **[Remote Management Guide](docs/REMOTE_MANAGEMENT.md)** - SSH and service management
 - **[Issues Resolved](docs/ISSUES_RESOLVED.md)** - Troubleshooting guide
-- **[Setup Complete Guide](docs/SETUP_COMPLETE.md)** - Post-installation reference
+- **[Setup Complete](docs/SETUP_COMPLETE.md)** - Post-installation reference
 - **[Reorganization Notes](docs/REORGANIZATION.md)** - Project structure details
 
 ### Quick Links
+
 - 🚀 **[Getting Started](#-quick-start)**
 - 🎯 **[Recommended Models](#-recommended-models)**
 - 🎮 **[Usage Guide](#-usage)**
