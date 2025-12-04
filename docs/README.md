@@ -23,6 +23,8 @@ Run separate LLM models on each of your NVIDIA GPUs simultaneously. Perfect for 
 - 🔧 **Easy Management** - Simple scripts for installation, service control, and testing
 - 🌐 **Local & Remote** - Works on localhost or remote servers via SSH
 - ⚙️ **Systemd Services** - Automatic startup, monitoring, and restart on failure
+- 🔄 **Easy Updates** - Update Ollama and Open WebUI with one command
+- 📦 **Isolated Model Storage** - Each GPU has its own model directory
 
 ---
 
@@ -32,11 +34,15 @@ Run separate LLM models on each of your NVIDIA GPUs simultaneously. Perfect for 
 frankenllm/
 ├── install.sh              # 🚀 Main installer (auto-detects local/remote)
 ├── manage.sh               # 🎛️  Main service manager
+├── update.sh               # 🔄 Update Ollama, WebUI, or all
 ├── configure.sh            # ⚙️  Configuration wizard
 ├── config.sh               # 📝 Configuration loader
 ├── .env.example            # 📋 Configuration template
 │
 ├── bin/                    # 🔧 Core utilities
+│   ├── add-model.sh        #    Add models to specific GPUs
+│   ├── warmup-config.sh    #    Configure which models stay warm
+│   ├── update.sh           #    Update Ollama and Open WebUI
 │   ├── check-gpus.sh       #    Check GPU configuration
 │   ├── health-check.sh     #    Test service connectivity
 │   ├── pull-model.sh       #    Pull same model on both GPUs
@@ -49,7 +55,8 @@ frankenllm/
 │
 └── remote/                 # 🌐 Remote installation scripts
     ├── install.sh          #    Install on remote server via SSH
-    └── manage.sh           #    Manage remote services via SSH
+    ├── manage.sh           #    Manage remote services via SSH
+    └── update.sh           #    Update components on remote server
 ```
 
 ---
@@ -93,6 +100,22 @@ Auto-detects local or remote from your configuration and:
 ```bash
 ./bin/health-check.sh
 ./bin/test-llm.sh "What is your purpose?"
+```
+
+### 5. Keep Components Updated
+
+```bash
+# Check for available updates
+./update.sh check
+
+# Update Ollama to latest version
+./update.sh ollama
+
+# Update Open WebUI container
+./update.sh webui
+
+# Update everything at once
+./update.sh all
 ```
 
 ---
@@ -349,7 +372,8 @@ If you encounter any issues or have questions:
 4. **Service Logs**: Check logs with `./manage.sh logs` (external terminal)
 5. **Model Issues**: Run `./bin/warmup-models.sh` to pre-load correct models
 6. **SSH Problems**: See [Remote Management Guide](REMOTE_MANAGEMENT.md)
-7. **Open an Issue**: If problems persist, [open a GitHub issue](https://github.com/ChiefGyk3D/FrankenLLM/issues)
+7. **Hardware Changes**: See [GPU Upgrade Guide](GPU_UPGRADE.md) for replacing or adding GPUs
+8. **Open an Issue**: If problems persist, [open a GitHub issue](https://github.com/ChiefGyk3D/FrankenLLM/issues)
 
 ---
 

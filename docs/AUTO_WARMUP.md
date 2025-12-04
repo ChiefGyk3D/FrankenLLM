@@ -73,7 +73,30 @@ The remote setup script will:
 
 ## Configuration
 
-Warmup uses your `.env` configuration:
+### Interactive Configuration (Recommended)
+
+Use the warmup configuration tool to select which models to keep warm:
+
+```bash
+# Interactive setup - choose models from what's installed
+./bin/warmup-config.sh set
+
+# Show current configuration
+./bin/warmup-config.sh show
+
+# Manually trigger warmup
+./bin/warmup-config.sh warmup
+
+# Check GPU memory status
+./bin/warmup-config.sh status
+
+# Clear all models from GPU memory
+./bin/warmup-config.sh clear
+```
+
+### Legacy Configuration (via .env)
+
+Warmup can also use your `.env` configuration as fallback:
 
 ```bash
 # Models to load on boot
@@ -85,6 +108,17 @@ FRANKEN_GPU_COUNT=2
 ```
 
 **Important**: Make sure these models are already pulled before enabling warmup!
+
+## Model Isolation
+
+Each GPU now has **isolated model storage**:
+- GPU 0 models: `~/.ollama/models-gpu0`
+- GPU 1 models: `~/.ollama/models-gpu1`
+
+This means:
+- Models added to GPU 0 won't appear on GPU 1
+- No more confusion about which GPU runs which model
+- Use `./bin/add-model.sh` to manage models per GPU
 
 ## Verifying Warmup
 
@@ -112,18 +146,29 @@ sudo journalctl -u frankenllm-warmup -n 50
 ssh YOUR_SERVER 'sudo journalctl -u frankenllm-warmup -n 50'
 ```
 
+### Check GPU Memory Status
+
+The easiest way to verify models are loaded:
+
+```bash
+./bin/warmup-config.sh status
+```
+
+This shows:
+- Memory usage per GPU
+- Which models are currently loaded
+- Model names and states
+
 ### Manual Test
 
 You can manually trigger warmup anytime:
 
-**Local:**
 ```bash
-./bin/warmup-models.sh
-```
+# Using the new config tool (recommended)
+./bin/warmup-config.sh warmup
 
-**Remote:**
-```bash
-ssh YOUR_SERVER 'cd /opt/frankenllm && ./bin/warmup-models.sh'
+# Or using the legacy script
+./bin/warmup-models.sh
 ```
 
 ## Managing the Service

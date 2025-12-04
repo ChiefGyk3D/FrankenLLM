@@ -92,6 +92,16 @@ else
 fi
 echo ""
 
+# Disable default Ollama service if it exists
+echo "Disabling default ollama service..."
+sudo systemctl stop ollama.service 2>/dev/null || true
+sudo systemctl disable ollama.service 2>/dev/null || true
+
+# Create isolated model directories for each GPU
+echo "Creating isolated model directories..."
+mkdir -p "$HOME/.ollama/models-gpu0"
+mkdir -p "$HOME/.ollama/models-gpu1"
+
 # Create systemd service for GPU 0
 echo "Creating systemd service for GPU 0 (port $GPU0_PORT)..."
 sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null << EOF
@@ -104,6 +114,7 @@ Type=simple
 User=$USER
 Environment="CUDA_VISIBLE_DEVICES=0"
 Environment="OLLAMA_HOST=0.0.0.0:$GPU0_PORT"
+Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu0"
 Environment="OLLAMA_KEEP_ALIVE=-1"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
@@ -126,6 +137,7 @@ Type=simple
 User=$USER
 Environment="CUDA_VISIBLE_DEVICES=1"
 Environment="OLLAMA_HOST=0.0.0.0:$GPU1_PORT"
+Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu1"
 Environment="OLLAMA_KEEP_ALIVE=-1"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always

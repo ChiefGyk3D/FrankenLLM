@@ -85,6 +85,7 @@ FrankenLLM/
 │   ├── OPEN_WEBUI.md       #    Web UI + N8n integration
 │   ├── QUICKSTART.md       #    Command reference
 │   ├── REMOTE_MANAGEMENT.md #   Remote server guide
+│   ├── GPU_UPGRADE.md      #    GPU replacement/upgrade guide
 │   └── archive/            #    Historical documentation
 │
 └── archive/                # 🗂️  Old scripts (reference only)
@@ -618,6 +619,7 @@ Complete documentation is available in the [`docs/`](docs/) directory:
 - **[Auto-Warmup Setup](docs/AUTO_WARMUP.md)** - 🔥 Keep models loaded and ready on boot
 - **[Open WebUI Integration](docs/OPEN_WEBUI.md)** - 🌐 Web interface and N8n automation
 - **[Remote Management](docs/REMOTE_MANAGEMENT.md)** - 🌐 SSH and remote server setup
+- **[GPU Upgrade Guide](docs/GPU_UPGRADE.md)** - 🔧 Replace, add, or reconfigure GPUs
 - **[Quick Start Reference](docs/QUICKSTART.md)** - ⚡ Fast command reference
 
 ### 📋 Additional Resources

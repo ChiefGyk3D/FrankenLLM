@@ -188,11 +188,56 @@ nvidia-smi
 | **Restart Services** | `./remote/service-control.sh restart` (external terminal) |
 | **View Logs** | `./remote/service-control.sh logs` (external terminal) |
 | **SSH In** | `ssh 192.168.201.145` |
+| **Add Model to GPU** | `./bin/add-model.sh 0 gemma3:12b` |
+| **Configure Warmup** | `./bin/warmup-config.sh set` |
+| **Check for Updates** | `./update.sh check` |
+| **Update All** | `./update.sh all` |
+
+## 🔄 Remote Updates
+
+Keep your remote system up to date from your workstation:
+
+```bash
+# Check for available updates
+./update.sh check
+
+# Update Ollama to the latest version
+./update.sh ollama
+
+# Update Open WebUI container
+./update.sh webui
+
+# Update everything
+./update.sh all
+```
+
+The update script auto-detects local vs. remote based on your `.env` configuration.
+
+## 🎯 Model Isolation (Per-GPU Storage)
+
+Each GPU has its own isolated model storage directory. This ensures:
+- Models pulled for GPU 0 only run on GPU 0
+- Models pulled for GPU 1 only run on GPU 1
+- No accidental model switching between GPUs
+
+```bash
+# Add a model to a specific GPU
+./bin/add-model.sh 0 gemma3:12b    # GPU 0 (larger models)
+./bin/add-model.sh 1 gemma3:4b     # GPU 1 (smaller models)
+
+# Interactive mode
+./bin/add-model.sh
+
+# List all models on each GPU
+./bin/add-model.sh list
+```
 
 ## 🎯 Summary
 
-1. **Model Storage**: Both GPUs see both models (shared storage)
+1. **Model Storage**: Each GPU has isolated storage (models-gpu0, models-gpu1)
 2. **Model Loading**: Models load on-demand into GPU memory
-3. **Ensuring Correct Usage**: Always specify model in API calls OR warm up after restart
-4. **SSH Issues**: VS Code terminal limitations - use external terminal for service control
-5. **Best Practice**: Use `health-check.sh` and `warmup-models.sh` from VS Code, service control from external terminal
+3. **Model Isolation**: Use `add-model.sh` to add models to specific GPUs
+4. **Warmup Configuration**: Use `warmup-config.sh` to select which models stay loaded
+5. **Keeping Updated**: Use `update.sh` to update Ollama and Open WebUI
+6. **SSH Issues**: VS Code terminal limitations - use external terminal for service control
+7. **Best Practice**: Use `health-check.sh` and `warmup-models.sh` from VS Code, service control from external terminal

@@ -67,17 +67,33 @@ FRANKEN_GPU1_MODEL="gemma3:4b"
 
 **How Model Configuration Works:**
 
-1. **Warmup Script** (`./bin/warmup-models.sh`):
-   - Loads the configured model into GPU memory on startup
-   - Priority: Command-line args > Config file > Default
-   - Example: `./bin/warmup-models.sh gemma3:12b gemma3:4b`
+1. **Isolated Model Storage** (v2.0+):
+   - Each GPU has its own model directory
+   - GPU 0 models: `~/.ollama/models-gpu0`
+   - GPU 1 models: `~/.ollama/models-gpu1`
+   - Models added to one GPU won't appear on another
 
-2. **Test Script** (`./bin/test-llm.sh`):
+2. **Add Models to Specific GPUs**:
+   ```bash
+   ./bin/add-model.sh 0 gemma3:12b   # Add to GPU 0
+   ./bin/add-model.sh 1 gemma3:4b    # Add to GPU 1
+   ./bin/add-model.sh                 # Interactive mode
+   ./bin/add-model.sh list            # List models per GPU
+   ```
+
+3. **Warmup Configuration**:
+   ```bash
+   ./bin/warmup-config.sh set         # Choose warmup models interactively
+   ./bin/warmup-config.sh warmup      # Load models into GPU memory
+   ./bin/warmup-config.sh status      # Check what's loaded
+   ```
+
+4. **Test Script** (`./bin/test-llm.sh`):
    - Uses configured models by default
    - Falls back to auto-detection if not configured
    - Shows which model it's using before running queries
 
-3. **Health Check** (`./bin/health-check.sh`):
+5. **Health Check** (`./bin/health-check.sh`):
    - Displays your preferred model for each GPU
    - Shows all installed models
    - Helps verify correct configuration

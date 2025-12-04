@@ -189,9 +189,38 @@ Here's what each root script does:
 | `configure.sh` | Create `.env` configuration | Manual workflow (step 1) |
 | `install.sh` | Run installation from `.env` | Manual workflow (step 2) |
 | `manage.sh` | Day-to-day operations | Both workflows (after install) |
+| `update.sh` | Update Ollama & Open WebUI | Both workflows (after install) |
 | `config.sh` | Load `.env` variables | All scripts (internal) |
 
-**All 5 scripts serve distinct purposes and are necessary!**
+**All 6 scripts serve distinct purposes and are necessary!**
+
+---
+
+## 🔧 Additional Management Tools
+
+These tools in `bin/` help manage your installation:
+
+| Script | Purpose |
+|--------|---------|
+| `bin/add-model.sh` | Add models to specific GPUs (isolated storage) |
+| `bin/warmup-config.sh` | Configure which models stay loaded in VRAM |
+| `bin/health-check.sh` | Test service connectivity |
+| `bin/test-llm.sh` | Test both LLMs with a query |
+
+```bash
+# Add models to specific GPUs
+./bin/add-model.sh 0 gemma3:12b    # Add to GPU 0
+./bin/add-model.sh 1 gemma3:4b     # Add to GPU 1
+./bin/add-model.sh list            # Show all models
+
+# Configure persistent warmup
+./bin/warmup-config.sh set         # Interactive setup
+./bin/warmup-config.sh status      # Show GPU memory
+
+# Keep components updated
+./update.sh check                  # Check for updates
+./update.sh all                    # Update everything
+```
 
 ---
 
@@ -200,6 +229,7 @@ Here's what each root script does:
 - [SUPER_INSTALLER.md](SUPER_INSTALLER.md) - Detailed guide to `setup-frankenllm.sh`
 - [GETTING_STARTED.md](GETTING_STARTED.md) - Complete setup guide
 - [CONFIGURATION.md](CONFIGURATION.md) - `.env` configuration reference
+- [GPU_UPGRADE.md](GPU_UPGRADE.md) - Replace, add, or reconfigure GPUs
 - [QUICKSTART.md](QUICKSTART.md) - Command reference
 - [QUESTIONS_ANSWERED.md](QUESTIONS_ANSWERED.md) - FAQ
 
@@ -209,9 +239,10 @@ Here's what each root script does:
 
 1. **First installation?** → Use Super Installer
 2. **Need to script it?** → Use Manual Mode with prepared `.env`
-3. **Upgrading?** → Super Installer detects and handles it gracefully
-4. **Troubleshooting?** → Manual Mode gives you step-by-step control
-5. **Daily operations?** → Always use `manage.sh` regardless of install method
+3. **Upgrading software?** → Super Installer detects and handles it gracefully
+4. **Upgrading hardware?** → See [GPU Upgrade Guide](GPU_UPGRADE.md) for GPU replacement
+5. **Troubleshooting?** → Manual Mode gives you step-by-step control
+6. **Daily operations?** → Always use `manage.sh` regardless of install method
 
 ---
 

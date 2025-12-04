@@ -9,8 +9,9 @@
 # 2. Install (auto-detects local/remote)
 ./install.sh
 
-# 3. Pull models
-./bin/pull-dual-models.sh gemma3:12b gemma3:4b
+# 3. Pull models to specific GPUs
+./bin/add-model.sh 0 gemma3:12b   # Add 12b to GPU 0
+./bin/add-model.sh 1 gemma3:4b    # Add 4b to GPU 1
 
 # 4. Test
 ./bin/health-check.sh
@@ -24,13 +25,25 @@
 ./manage.sh restart         # Restart services
 ./manage.sh logs            # View logs
 
+# Updates
+./update.sh check           # Check for updates
+./update.sh all             # Update Ollama + Open WebUI
+
 # Health Checks
 ./bin/health-check.sh       # Quick status
 ./bin/check-gpus.sh         # Detailed GPU info
 
 # Model Management
-./bin/pull-dual-models.sh MODEL1 MODEL2  # Different models per GPU
-./bin/pull-model.sh MODEL                # Same model on both GPUs
+./bin/add-model.sh                   # Interactive mode
+./bin/add-model.sh 0 MODEL           # Add to specific GPU
+./bin/add-model.sh list              # List models per GPU
+./bin/pull-dual-models.sh MODEL1 MODEL2  # Legacy: different models per GPU
+
+# Warmup Configuration
+./bin/warmup-config.sh set           # Configure warmup models
+./bin/warmup-config.sh warmup        # Load models into GPU memory
+./bin/warmup-config.sh status        # Show GPU memory status
+./bin/warmup-config.sh clear         # Unload all models
 
 # Testing
 ./bin/test-llm.sh "Your question here"
@@ -75,10 +88,22 @@ curl http://YOUR_IP:11435/api/generate -d '{
 ./manage.sh logs
 ```
 
+**Model on wrong GPU?**
+```bash
+# Check which models are on which GPU
+./bin/add-model.sh list
+
+# Each GPU has isolated storage - models don't cross over
+```
+
 **Remote SSH issues?**
-- Make sure SSH keys are set up
+- Make sure SSH keys are set up: `ssh-copy-id YOUR_SERVER_IP`
 - Check `.env` has correct server IP
 - Run `./configure.sh` to reconfigure
+
+**Upgrading/Replacing a GPU?**
+- See [GPU Upgrade Guide](GPU_UPGRADE.md) for step-by-step instructions
+- Quick: Stop services → Swap hardware → Verify with `nvidia-smi` → Pull models → Start
 
 ## 📁 File Organization
 

@@ -110,6 +110,54 @@ This automatically:
 ./bin/check-gpus.sh
 ```
 
+### Managing Models Per GPU
+
+Each GPU has its own isolated model storage. Add models to specific GPUs:
+
+```bash
+# Add model to a specific GPU
+./bin/add-model.sh 0 gemma3:12b    # Add to GPU 0 (larger GPU)
+./bin/add-model.sh 1 gemma3:4b     # Add to GPU 1 (smaller GPU)
+
+# Interactive mode
+./bin/add-model.sh
+
+# List models on each GPU
+./bin/add-model.sh list
+```
+
+### Configuring Model Warmup
+
+Choose which models stay loaded in GPU memory for instant responses:
+
+```bash
+# Interactive setup - select models to keep warm
+./bin/warmup-config.sh set
+
+# Show current warmup configuration
+./bin/warmup-config.sh show
+
+# Manually warm up configured models
+./bin/warmup-config.sh warmup
+
+# View GPU memory status
+./bin/warmup-config.sh status
+```
+
+### Keeping Components Updated
+
+```bash
+# Check for available updates
+./update.sh check
+
+# Update everything
+./update.sh all
+
+# Update individual components
+./update.sh ollama    # Update Ollama
+./update.sh webui     # Update Open WebUI
+```
+
 ### Installing Open WebUI (Optional but Recommended)
 
 Open WebUI provides a ChatGPT-like web interface:
@@ -134,6 +182,7 @@ For more in-depth information, see:
 - **[Remote Management Guide](REMOTE_MANAGEMENT.md)** - Managing remote servers
 - **[Auto-Warmup Guide](AUTO_WARMUP.md)** - Keep models loaded in VRAM
 - **[Open WebUI Guide](OPEN_WEBUI.md)** - Web interface and N8n integration
+- **[GPU Upgrade Guide](GPU_UPGRADE.md)** - Replace, add, or reconfigure GPUs
 - **[Quick Reference](QUICKSTART.md)** - Command cheat sheet
 
 ---
