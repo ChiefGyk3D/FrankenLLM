@@ -37,10 +37,11 @@ FrankenLLM/
 ├── ⚙️  configure.sh         # Manual mode: Step 1 - Create .env config
 ├── 🔧 install.sh            # Manual mode: Step 2 - Run installation
 ├── 🎛️  manage.sh            # Day-to-day: Start/stop/restart/logs
+├── 🔄 update.sh             # Update Ollama, Open WebUI, or all
 ├── 📝 config.sh             # Internal: Configuration loader
 ├── .env.example            # 📋 Configuration template
 │
-├── bin/                    # 🔧 Core utilities (12 tools)
+├── bin/                    # 🔧 Core utilities (13 tools)
 │   ├── check-gpus.sh       #    GPU status & utilization
 │   ├── health-check.sh     #    Service connectivity test
 │   ├── chat.sh             #    Interactive CLI chat
@@ -52,7 +53,8 @@ FrankenLLM/
 │   ├── warmup-on-boot.sh   #    Boot warmup service script
 │   ├── enable-keep-alive.sh #   Keep models in VRAM forever
 │   ├── install-webui.sh    #    Install Open WebUI locally
-│   └── manage-webui.sh     #    Manage Open WebUI locally
+│   ├── manage-webui.sh     #    Manage Open WebUI locally
+│   └── update.sh           #    Update components locally
 │
 ├── local/                  # 💻 Local installation
 │   ├── install.sh          #    Install on THIS machine
@@ -64,7 +66,8 @@ FrankenLLM/
 │   ├── service-control.sh  #    Remote service control
 │   ├── setup-warmup.sh     #    Configure auto-warmup remotely
 │   ├── install-webui.sh    #    Install Open WebUI remotely
-│   └── manage-webui.sh     #    Manage remote Open WebUI
+│   ├── manage-webui.sh     #    Manage remote Open WebUI
+│   └── update.sh           #    Update components remotely
 │
 ├── scripts/                # 📦 Installation components
 │   ├── install-docker.sh   #    Docker + NVIDIA Container Toolkit
@@ -323,6 +326,20 @@ Auto-detects local or remote from your configuration and:
 # Enable/disable auto-start on boot
 ./manage.sh enable
 ./manage.sh disable
+```
+
+### Updating Components
+
+```bash
+# Check for available updates
+./update.sh check
+
+# Update everything (Ollama + Open WebUI)
+./update.sh all
+
+# Update individual components
+./update.sh ollama    # Update Ollama to latest
+./update.sh webui     # Update Open WebUI to latest
 ```
 
 ### Interactive Chat
