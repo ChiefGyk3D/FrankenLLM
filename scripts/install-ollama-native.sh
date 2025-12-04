@@ -13,6 +13,14 @@ INSTALL_SCRIPT=$(cat << 'ENDSSH'
 # Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
+# Disable default ollama service if it exists
+sudo systemctl stop ollama.service 2>/dev/null || true
+sudo systemctl disable ollama.service 2>/dev/null || true
+
+# Create model directories for each GPU (isolated storage)
+mkdir -p "$HOME/.ollama/models-gpu0"
+mkdir -p "$HOME/.ollama/models-gpu1"
+
 # Create systemd service for GPU 0
 sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null << EOF
 [Unit]
@@ -24,6 +32,8 @@ Type=simple
 User=$USER
 Environment="CUDA_VISIBLE_DEVICES=0"
 Environment="OLLAMA_HOST=0.0.0.0:$FRANKEN_GPU0_PORT"
+Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu0"
+Environment="OLLAMA_KEEP_ALIVE=-1"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3
@@ -43,6 +53,8 @@ Type=simple
 User=$USER
 Environment="CUDA_VISIBLE_DEVICES=1"
 Environment="OLLAMA_HOST=0.0.0.0:$FRANKEN_GPU1_PORT"
+Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu1"
+Environment="OLLAMA_KEEP_ALIVE=-1"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3

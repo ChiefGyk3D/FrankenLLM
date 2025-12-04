@@ -41,7 +41,9 @@ FrankenLLM/
 ├── 📝 config.sh             # Internal: Configuration loader
 ├── .env.example            # 📋 Configuration template
 │
-├── bin/                    # 🔧 Core utilities (13 tools)
+├── bin/                    # 🔧 Core utilities (15 tools)
+│   ├── add-model.sh        #    Add models to specific GPUs
+│   ├── warmup-config.sh    #    Configure which models stay warm
 │   ├── check-gpus.sh       #    GPU status & utilization
 │   ├── health-check.sh     #    Service connectivity test
 │   ├── chat.sh             #    Interactive CLI chat
@@ -341,6 +343,27 @@ Auto-detects local or remote from your configuration and:
 ./update.sh ollama    # Update Ollama to latest
 ./update.sh webui     # Update Open WebUI to latest
 ```
+
+### Model Management
+
+```bash
+# Add a model to a specific GPU
+./bin/add-model.sh 0 gemma3:12b    # Add to GPU 0
+./bin/add-model.sh 1 gemma3:4b     # Add to GPU 1
+./bin/add-model.sh                  # Interactive mode
+
+# List models on each GPU
+./bin/add-model.sh list
+
+# Configure which models stay warmed up
+./bin/warmup-config.sh set          # Interactive setup
+./bin/warmup-config.sh show         # Show current config
+./bin/warmup-config.sh warmup       # Load configured models
+./bin/warmup-config.sh clear        # Unload all models
+./bin/warmup-config.sh status       # Show GPU memory status
+```
+
+> 💡 Each GPU has isolated model storage - models added to GPU 0 won't appear on GPU 1.
 
 ### Interactive Chat
 

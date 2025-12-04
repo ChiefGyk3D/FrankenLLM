@@ -94,13 +94,20 @@ case "$1" in
         check_container
         echo "🔄 Updating Open WebUI on remote server..."
         echo ""
+        
+        # Build Ollama URLs for all GPUs
+        OLLAMA_URLS="http://host.docker.internal:$FRANKEN_GPU0_PORT"
+        if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+            OLLAMA_URLS="$OLLAMA_URLS;http://host.docker.internal:$FRANKEN_GPU1_PORT"
+        fi
+        
         ssh "$FRANKEN_SERVER_IP" "docker pull ghcr.io/open-webui/open-webui:main && \
             docker stop $CONTAINER_NAME && \
             docker rm $CONTAINER_NAME && \
             docker run -d \
                 -p 3000:8080 \
                 --add-host=host.docker.internal:host-gateway \
-                -e OLLAMA_BASE_URL=http://host.docker.internal:$FRANKEN_GPU0_PORT \
+                -e OLLAMA_BASE_URLS='$OLLAMA_URLS' \
                 -v open-webui:/app/backend/data \
                 --name open-webui \
                 --restart always \

@@ -120,6 +120,12 @@ update_webui() {
         return 1
     fi
     
+    # Build Ollama URLs for all GPUs
+    OLLAMA_URLS="http://host.docker.internal:$FRANKEN_GPU0_PORT"
+    if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+        OLLAMA_URLS="$OLLAMA_URLS;http://host.docker.internal:$FRANKEN_GPU1_PORT"
+    fi
+    
     # Execute update on remote server
     ssh "$FRANKEN_SERVER_IP" "
         echo '📥 Pulling latest Open WebUI image...'
@@ -133,7 +139,7 @@ update_webui() {
         docker run -d \
             -p 3000:8080 \
             --add-host=host.docker.internal:host-gateway \
-            -e OLLAMA_BASE_URL=http://host.docker.internal:${FRANKEN_GPU0_PORT} \
+            -e OLLAMA_BASE_URLS='$OLLAMA_URLS' \
             -v open-webui:/app/backend/data \
             --name open-webui \
             --restart always \

@@ -105,19 +105,31 @@ case "$1" in
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         if [ -f "$SCRIPT_DIR/../config.sh" ]; then
             source "$SCRIPT_DIR/../config.sh"
+            
+            # Build Ollama URLs for all GPUs
             if [ "$FRANKEN_SERVER_IP" = "localhost" ] || [ "$FRANKEN_SERVER_IP" = "127.0.0.1" ]; then
+                OLLAMA_URLS="http://host.docker.internal:$FRANKEN_GPU0_PORT"
+                if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+                    OLLAMA_URLS="$OLLAMA_URLS;http://host.docker.internal:$FRANKEN_GPU1_PORT"
+                fi
+                
                 docker run -d \
                     -p 3000:8080 \
                     --add-host=host.docker.internal:host-gateway \
-                    -e OLLAMA_BASE_URL=http://host.docker.internal:$FRANKEN_GPU0_PORT \
+                    -e OLLAMA_BASE_URLS="$OLLAMA_URLS" \
                     -v open-webui:/app/backend/data \
                     --name open-webui \
                     --restart always \
                     ghcr.io/open-webui/open-webui:main
             else
+                OLLAMA_URLS="http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT"
+                if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
+                    OLLAMA_URLS="$OLLAMA_URLS;http://$FRANKEN_SERVER_IP:$FRANKEN_GPU1_PORT"
+                fi
+                
                 docker run -d \
                     -p 3000:8080 \
-                    -e OLLAMA_BASE_URL=http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT \
+                    -e OLLAMA_BASE_URLS="$OLLAMA_URLS" \
                     -v open-webui:/app/backend/data \
                     --name open-webui \
                     --restart always \
