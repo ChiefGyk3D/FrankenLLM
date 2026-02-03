@@ -1,0 +1,15 @@
+[Unit]
+Description=FrankenLLM GPU Health Auto-Fix
+After=network.target nvidia-persistenced.service
+Wants=nvidia-persistenced.service
+Before=ollama-gpu0.service ollama-gpu1.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/frankenllm/scripts/auto-fix.sh check
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

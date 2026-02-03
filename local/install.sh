@@ -149,6 +149,26 @@ echo "Enabling warmup service..."
 sudo systemctl daemon-reload
 sudo systemctl enable frankenllm-warmup.service
 
+# Install health check module
+echo ""
+echo "Installing health check module..."
+INSTALL_DIR_ABS="$(cd "$SCRIPT_DIR/.." && pwd)"
+export FRANKEN_INSTALL_DIR="$INSTALL_DIR_ABS"
+
+# Create necessary directories in install location
+sudo mkdir -p "$INSTALL_DIR_ABS/scripts"
+sudo cp "$SCRIPT_DIR/../scripts/health-check.sh" "$INSTALL_DIR_ABS/scripts/" 2>/dev/null || true
+sudo cp "$SCRIPT_DIR/../scripts/auto-fix.sh" "$INSTALL_DIR_ABS/scripts/" 2>/dev/null || true
+sudo chmod +x "$INSTALL_DIR_ABS/scripts/"*.sh 2>/dev/null || true
+
+# Run the health module installer
+if [ -f "$SCRIPT_DIR/../scripts/install-health-module.sh" ]; then
+    sudo bash "$SCRIPT_DIR/../scripts/install-health-module.sh" install
+    echo "✅ Health check module installed"
+else
+    echo "⚠️  Health check module installer not found, skipping..."
+fi
+
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║                Installation Complete! ✅                    ║"
@@ -169,6 +189,7 @@ if [ "$GPU_COUNT" -ge 2 ]; then
 fi
 echo ""
 echo "Auto-warmup on boot: ✅ ENABLED"
+echo "GPU Health Monitor:  ✅ ENABLED"
 echo "Models will automatically load into GPU memory after system restart"
 echo ""
 echo "Next steps:"
@@ -176,3 +197,8 @@ echo "  1. Run: ./local/manage.sh status"
 echo "  2. Pull models: ./bin/pull-dual-models.sh gemma3:12b gemma3:4b"
 echo "  3. Test warmup now: ./bin/warmup-models.sh"
 echo "  4. Test queries: ./bin/test-llm.sh"
+echo ""
+echo "Health Commands:"
+echo "  frankenllm health        - Run GPU health check"
+echo "  frankenllm fix           - Attempt to fix GPU issues"
+echo "  frankenllm reset-alerts  - Clear alerts after manual fix"

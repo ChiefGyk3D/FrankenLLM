@@ -83,11 +83,26 @@ case $ACTION in
     echo "To disable services on boot, run:"
     echo "  ssh -t $FRANKEN_SERVER_IP 'sudo systemctl disable $SERVICES'"
     ;;
+  health|check)
+    echo "=== Health Check on $FRANKEN_SERVER_IP ==="
+    echo ""
+    MODE="${2:-full}"
+    if [ "$MODE" = "quick" ] || [ "$MODE" = "-q" ]; then
+        ssh "$FRANKEN_SERVER_IP" 'nvidia-smi &>/dev/null && echo "✓ Quick check passed" || echo "✗ GPU check failed"'
+    else
+        echo "Running health check via SSH..."
+        echo "  ssh -t $FRANKEN_SERVER_IP '$FRANKEN_INSTALL_DIR/scripts/health-check.sh'"
+        echo ""
+        ssh -t "$FRANKEN_SERVER_IP" "$FRANKEN_INSTALL_DIR/scripts/health-check.sh" 2>/dev/null || \
+            echo "Note: Health check script may not be installed on remote. Copy it with:"
+            echo "  scp scripts/health-check.sh $FRANKEN_SERVER_IP:$FRANKEN_INSTALL_DIR/scripts/"
+    fi
+    ;;
   *)
     echo "FrankenLLM - Remote Service Management"
     echo "Target: $FRANKEN_SERVER_IP"
     echo ""
-    echo "Usage: $0 {start|stop|restart|status|logs|enable|disable}"
+    echo "Usage: $0 {start|stop|restart|status|logs|enable|disable|health}"
     echo ""
     echo "Commands:"
     echo "  start    - Start both Ollama services"
@@ -97,6 +112,7 @@ case $ACTION in
     echo "  logs     - Show recent logs"
     echo "  enable   - Enable services on boot"
     echo "  disable  - Disable services on boot"
+    echo "  health   - Run system health check (use 'health quick' for quick check)"
     echo ""
     echo "Note: You'll be prompted for sudo password on the remote server"
     exit 1

@@ -60,10 +60,14 @@ case $ACTION in
     echo "Disabling Ollama services on boot..."
     sudo systemctl disable $SERVICES
     ;;
+  health|check)
+    # Run health check
+    "$PROJECT_ROOT/scripts/health-check.sh" "${2:-full}"
+    ;;
   *)
     echo "FrankenLLM - Local Service Management"
     echo ""
-    echo "Usage: $0 {start|stop|restart|status|logs|enable|disable}"
+    echo "Usage: $0 {start|stop|restart|status|logs|enable|disable|health}"
     echo ""
     echo "Commands:"
     echo "  start    - Start both Ollama services"
@@ -73,6 +77,7 @@ case $ACTION in
     echo "  logs     - Show recent logs"
     echo "  enable   - Enable services on boot"
     echo "  disable  - Disable services on boot"
+    echo "  health   - Run system health check (use 'health quick' for quick check)"
     exit 1
     ;;
 esac

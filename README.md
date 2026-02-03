@@ -24,6 +24,7 @@ Run separate LLM models on each of your NVIDIA GPUs simultaneously. Perfect for 
 - 🌐 **Local & Remote** - Works on localhost or remote servers via SSH
 - ⚙️ **Systemd Services** - Automatic startup, monitoring, and restart on failure
 - 🔥 **Auto-Warmup** - Models automatically load into GPU memory on boot
+- 🩺 **GPU Health Monitor** - Auto-fix driver issues on boot with intelligent retry and alerts
 - ⚡ **Configurable** - Support for 1+ GPUs with flexible model selection
 - 🖥️ **Headless Ready** - Designed for Ubuntu Server 24.04 (tested with Linux 6.14 + NVIDIA 580 drivers)
 
@@ -73,7 +74,10 @@ FrankenLLM/
 │
 ├── scripts/                # 📦 Installation components
 │   ├── install-docker.sh   #    Docker + NVIDIA Container Toolkit
-│   └── install-ollama-native.sh # Native Ollama installation
+│   ├── install-ollama-native.sh # Native Ollama installation
+│   ├── health-check.sh     #    GPU health diagnostics
+│   ├── auto-fix.sh         #    Automatic GPU issue repair
+│   └── install-health-module.sh # Health module installer
 │
 ├── docs/                   # 📚 Complete documentation
 │   ├── README.md           #    Full documentation
@@ -504,7 +508,85 @@ FRANKEN_GPU1_MODEL="deepseek-coder:6.7b"
 
 ---
 
+## 🩺 GPU Health Monitoring
+
+FrankenLLM includes automatic GPU health monitoring that detects and fixes common NVIDIA driver issues.
+
+### Health Check Commands
+
+```bash
+# Full health check (GPU, drivers, services, disk, RAM)
+frankenllm health
+
+# Quick pass/fail check
+frankenllm health quick
+
+# Or use manage.sh
+./manage.sh health
+./manage.sh health quick
+```
+
+### Auto-Fix on Boot
+
+The health module automatically:
+1. Checks GPU health on every boot (before Ollama starts)
+2. Detects driver/library version mismatches
+3. Attempts to reload NVIDIA modules to fix issues
+4. Reboots up to 3 times if fixes fail
+5. Creates a login alert if issues persist
+
+### Manual Fix Commands
+
+```bash
+# Attempt to fix GPU issues manually
+frankenllm fix
+
+# View auto-fix status (failure count, last error)
+frankenllm autofix-status
+
+# Clear alerts after manual fix
+frankenllm reset-alerts
+```
+
+### Installing Health Module (Existing Systems)
+
+If you installed FrankenLLM before v1.2.0, add the health module:
+
+```bash
+# Full installation (recommended)
+sudo ./scripts/install-health-module.sh install
+
+# Check installation status
+./scripts/install-health-module.sh status
+
+# Uninstall
+sudo ./scripts/install-health-module.sh uninstall
+```
+
+---
+
 ## 🔍 Troubleshooting
+
+### NVIDIA Driver/Library Version Mismatch
+
+**Symptom**: `nvidia-smi` fails with "Driver/library version mismatch"
+
+**Cause**: Driver was updated but system wasn't rebooted
+
+**Solution**:
+```bash
+# Option 1: Let auto-fix handle it (if health module installed)
+frankenllm fix
+
+# Option 2: Reboot
+sudo reboot
+
+# Option 3: Manual module reload (if GPUs not in use)
+sudo systemctl stop ollama-gpu0 ollama-gpu1
+sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia
+sudo modprobe nvidia
+sudo systemctl start ollama-gpu0 ollama-gpu1
+```
 
 ### Services won't start
 
