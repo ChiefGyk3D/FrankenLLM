@@ -77,6 +77,15 @@ curl http://YOUR_IP:11435/api/generate -d '{
 
 ## 🆘 Troubleshooting
 
+**GPU0 keeps restarting / Port 11434 in use?**
+```bash
+# The default ollama.service may be stealing the port
+# Mask it permanently:
+sudo systemctl stop ollama.service
+sudo systemctl mask ollama.service
+sudo systemctl restart ollama-gpu0
+```
+
 **Services offline?**
 ```bash
 ./manage.sh restart

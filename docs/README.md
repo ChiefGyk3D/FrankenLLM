@@ -297,6 +297,24 @@ FRANKEN_GPU1_MODEL="deepseek-coder:6.7b"
 
 ## 🔍 Troubleshooting
 
+### GPU0 service won't start (port conflict)
+
+```bash
+# Check if default ollama.service is stealing port 11434
+sudo ss -tlnp | grep 11434
+
+# If you see 127.0.0.1:11434, the default service is running
+# Mask it permanently:
+sudo systemctl stop ollama.service
+sudo systemctl disable ollama.service  
+sudo rm -f /etc/systemd/system/ollama.service
+sudo systemctl daemon-reload
+sudo systemctl mask ollama.service
+
+# Restart GPU0
+sudo systemctl restart ollama-gpu0
+```
+
 ### Services won't start
 
 ```bash

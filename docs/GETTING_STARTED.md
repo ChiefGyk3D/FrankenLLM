@@ -295,19 +295,30 @@ Models will now auto-load on boot! ⚡
 
 ### Port Already in Use
 
-**Problem:** Installation fails with "port 11434 already in use".
+**Problem:** Installation fails with "port 11434 already in use" or GPU0 service keeps restarting.
+
+**Cause:** The default `ollama.service` (installed by Ollama's installer) is running and grabbing port 11434 before `ollama-gpu0` can start.
 
 **Solution:**
 ```bash
-# Find what's using the port
-sudo lsof -i :11434
+# Check what's using the port
+sudo ss -tlnp | grep 11434
 
-# If it's Ollama, stop it
-sudo systemctl stop ollama
+# If it shows 127.0.0.1:11434 (localhost only), it's the default service
+# FrankenLLM services bind to 0.0.0.0 (all interfaces)
 
-# Then reinstall
-./install.sh
+# Stop, disable, and MASK the default service
+sudo systemctl stop ollama.service
+sudo systemctl disable ollama.service
+sudo rm -f /etc/systemd/system/ollama.service
+sudo systemctl daemon-reload
+sudo systemctl mask ollama.service
+
+# Restart FrankenLLM services
+sudo systemctl restart ollama-gpu0 ollama-gpu1
 ```
+
+**Why mask?** Masking creates a symlink to `/dev/null`, permanently preventing the service from starting - even after Ollama updates that might try to re-enable it. FrankenLLM's install scripts do this automatically, but if you installed Ollama manually before FrankenLLM, you may need to mask it yourself.
 
 ### Open WebUI Not Loading
 
