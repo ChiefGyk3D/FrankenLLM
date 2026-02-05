@@ -567,6 +567,31 @@ sudo ./scripts/install-health-module.sh uninstall
 
 ## 🔍 Troubleshooting
 
+### Port 11434 Already in Use / GPU0 Won't Start
+
+**Symptom**: `ollama-gpu0` service keeps restarting with "address already in use" error
+
+**Cause**: The default `ollama.service` (installed by Ollama's official installer) is running and grabbing port 11434 before FrankenLLM's `ollama-gpu0` can start.
+
+**Solution**:
+```bash
+# Check what's using the port
+sudo ss -tlnp | grep 11434
+# If you see 127.0.0.1:11434, the default service is the culprit
+
+# Stop, disable, and MASK the default service permanently
+sudo systemctl stop ollama.service
+sudo systemctl disable ollama.service
+sudo rm -f /etc/systemd/system/ollama.service
+sudo systemctl daemon-reload
+sudo systemctl mask ollama.service
+
+# Restart FrankenLLM GPU0
+sudo systemctl restart ollama-gpu0
+```
+
+> 💡 **Why mask?** Masking creates a symlink to `/dev/null`, permanently preventing the service from starting - even after system updates or Ollama updates that might try to re-enable it. FrankenLLM's install scripts do this automatically since v1.2.0.
+
 ### NVIDIA Driver/Library Version Mismatch
 
 **Symptom**: `nvidia-smi` fails with "Driver/library version mismatch"
