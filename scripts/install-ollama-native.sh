@@ -13,9 +13,13 @@ INSTALL_SCRIPT=$(cat << 'ENDSSH'
 # Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Disable default ollama service if it exists
+# Disable and MASK default ollama service to prevent it from ever starting
+# (even after Ollama updates which may try to re-enable it)
 sudo systemctl stop ollama.service 2>/dev/null || true
 sudo systemctl disable ollama.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
+sudo systemctl daemon-reload
+sudo systemctl mask ollama.service 2>/dev/null || true
 
 # Create model directories for each GPU (isolated storage)
 mkdir -p "$HOME/.ollama/models-gpu0"

@@ -88,6 +88,14 @@ update_ollama() {
     echo "📥 Downloading latest Ollama..."
     curl -fsSL https://ollama.com/install.sh | sh
     
+    # Re-mask the default service (Ollama installer may recreate it)
+    echo "🔒 Ensuring default ollama.service stays masked..."
+    sudo systemctl stop ollama.service 2>/dev/null || true
+    sudo systemctl disable ollama.service 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
+    sudo systemctl daemon-reload
+    sudo systemctl mask ollama.service 2>/dev/null || true
+    
     # Restart services
     echo "▶️  Starting Ollama services..."
     sudo systemctl start ollama-gpu0

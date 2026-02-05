@@ -49,10 +49,15 @@ else
 fi
 echo ""
 
-# Disable default Ollama service if it exists
-echo "Disabling default ollama service..."
+# Disable and MASK default Ollama service to prevent it from ever starting
+# (even after Ollama updates which may try to re-enable it)
+echo "Disabling and masking default ollama service..."
 sudo systemctl stop ollama.service 2>/dev/null || true
 sudo systemctl disable ollama.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
+sudo systemctl daemon-reload
+sudo systemctl mask ollama.service 2>/dev/null || true
+echo "✅ Default ollama.service masked (permanently prevented from starting)"
 
 # Create isolated model directories for each GPU
 echo "Creating isolated model directories..."
