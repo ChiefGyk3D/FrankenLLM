@@ -162,9 +162,100 @@ Users can select which model (and thus which GPU) to use:
 ## Advanced Features
 
 ### RAG (Retrieval Augmented Generation)
-- Upload documents in chat
-- Create document collections
-- Use `#` to reference documents
+
+RAG lets you upload documents and have the LLM answer questions using their content. FrankenLLM's multi-GPU setup is ideal for RAG — dedicate one GPU to embedding models and keep your primary GPU free for chat.
+
+#### How It Works
+
+1. **Upload** — You upload a document (PDF, DOCX, TXT, etc.) to Open WebUI
+2. **Chunk** — The document is split into chunks (default: 1000 characters with 100 overlap)
+3. **Embed** — Each chunk is converted to a vector using the embedding model on your dedicated GPU
+4. **Store** — Vectors are stored in Open WebUI's built-in vector database
+5. **Retrieve** — When you ask a question, the most relevant chunks are found via similarity search
+6. **Generate** — The retrieved chunks are injected into the prompt, and your chat model generates an answer
+
+#### Embedding Model Setup
+
+Pull an embedding model onto your secondary GPU (the one you want to dedicate to embeddings):
+
+```bash
+# Pull onto GPU 1 (e.g., RTX 3050)
+./bin/add-model.sh 1 qwen3-embedding:0.6b
+```
+
+Then configure in Open WebUI at **Admin > Settings > Documents > Embedding**:
+
+| Setting | Value |
+|---------|-------|
+| Embedding Model Engine | Ollama |
+| Embedding Model | `qwen3-embedding:0.6b` (or your chosen model) |
+| Ollama Base URL | `http://localhost:11435` (GPU 1 port) |
+
+> **Tip:** You don't need to keep the embedding model warm. Ollama loads it on-demand when Open WebUI sends an embedding request, then unloads it after 5 minutes of idle time. This lets the GPU freely swap between embedding and chat models as needed.
+
+#### Choosing an Embedding Model
+
+Qwen3-Embedding is currently the top-performing embedding model family on Ollama. Here's how the sizes compare:
+
+| Model | VRAM Usage | Context | Max Dimensions | Quality | Best For |
+|-------|-----------|---------|----------------|---------|----------|
+| `qwen3-embedding:0.6b` | ~639 MB | 32K | 1024 | Good | Light RAG, low VRAM GPUs, coexisting with chat models |
+| `qwen3-embedding:4b` | ~2.5 GB | 40K | 2560 | Better | Balanced quality/VRAM, most multi-GPU setups |
+| `qwen3-embedding:8b` | ~4.7 GB | 40K | 4096 | Best (#1 MTEB) | Maximum retrieval quality, dedicated embedding GPU |
+| `nomic-embed-text` | ~270 MB | 8K | 768 | Good | Minimal footprint, always coexist with chat models |
+
+**Tradeoffs:**
+- **Larger models = better retrieval accuracy** — The 8B finds more relevant chunks, especially for nuanced or multilingual queries
+- **Larger models = more VRAM** — May not coexist with a chat model on the same GPU simultaneously (Ollama swaps on-demand, so this is fine if the GPU isn't doing both at once)
+- **Larger models = slower embedding** — First document upload takes longer, but this is a one-time cost per document
+- **Embedding dimensions** — Higher dimensions capture more semantic detail but use more storage. For most RAG use cases, 1024 dims is sufficient
+- **Context length** — 32K-40K means even large document chunks are handled without truncation
+
+**Example GPU configurations:**
+
+| GPU (VRAM) | Recommended Embedding Model | Can coexist with |
+|------------|----------------------------|-------------------|
+| 8 GB (e.g., RTX 3050) | `qwen3-embedding:0.6b` or `4b` | `gemma3:4b` or similar ≤4B chat model |
+| 8 GB (dedicated to RAG) | `qwen3-embedding:8b` | Nothing simultaneously, swaps on-demand |
+| 12-16 GB | `qwen3-embedding:8b` | Most 7B chat models |
+
+#### Recommended Document Settings
+
+Configure in **Admin > Settings > Documents**:
+
+| Setting | Recommended | Notes |
+|---------|-------------|-------|
+| Chunk Size | 1000 | Good default. Increase to 1500-2000 for technical docs with long code blocks |
+| Chunk Overlap | 100 | Prevents losing context at chunk boundaries |
+| Embedding Batch Size | 8-16 | Process multiple chunks at once. Higher = faster uploads on dedicated GPU |
+| Async Embedding Processing | On | Don't block the UI while embedding |
+| Top K | 3-5 | Number of chunks injected into the prompt. More = more context but uses more tokens |
+| Hybrid Search | On (recommended) | Combines vector similarity with keyword matching — better for technical/exact terms |
+| Full Context Mode | Off | Sends entire document to LLM — defeats the purpose of RAG, wastes tokens |
+
+#### Using RAG
+
+1. **Upload documents** — Drag files into a chat, or go to **Workspace > Knowledge** to create collections
+2. **Reference in chat** — Type `#` to browse and select a knowledge collection
+3. **Ask questions** — The LLM will answer using the document content and cite sources
+
+#### Architecture: Separating Embedding from Chat
+
+The key advantage of FrankenLLM for RAG is GPU isolation:
+
+```
+ User Question
+      │
+      ├──► GPU 1 (RTX 3050) ──► qwen3-embedding ──► Find relevant chunks
+      │                                                    │
+      │◄──────────────────────── Top K chunks ◄────────────┘
+      │
+      └──► GPU 0 (RTX 5060 Ti) ──► gemma3:12b ──► Generate answer with chunks
+```
+
+- **GPU 0** stays free for chat generation — no VRAM competition
+- **GPU 1** handles embedding on-demand — loads/unloads automatically
+- Both can work simultaneously if needed (embedding new docs while chatting)
 
 ### Image Generation
 - Configure DALL-E, Stable Diffusion, or ComfyUI

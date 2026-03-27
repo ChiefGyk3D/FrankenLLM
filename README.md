@@ -370,6 +370,22 @@ Auto-detects local or remote from your configuration and:
 
 > 💡 Each GPU has isolated model storage - models added to GPU 0 won't appear on GPU 1.
 
+### Embedding Models for RAG
+
+You can add embedding models to a GPU for RAG (Retrieval Augmented Generation) in Open WebUI:
+
+```bash
+# Pull an embedding model onto GPU 1
+./bin/add-model.sh 1 qwen3-embedding:0.6b
+
+# Other options depending on your VRAM:
+# ./bin/add-model.sh 1 qwen3-embedding:4b    # 2.5 GB, better quality
+# ./bin/add-model.sh 1 qwen3-embedding:8b    # 4.7 GB, best quality (#1 MTEB)
+# ./bin/add-model.sh 1 nomic-embed-text      # 270 MB, minimal footprint
+```
+
+Then configure Open WebUI: **Admin > Settings > Documents > Embedding** — set Engine to Ollama, model to your embedding model, and URL to your GPU's port. See [docs/OPEN_WEBUI.md](docs/OPEN_WEBUI.md#rag-retrieval-augmented-generation) for full setup guide.
+
 ### Interactive Chat
 
 ```bash
