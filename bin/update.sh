@@ -169,7 +169,6 @@ update_webui() {
             --restart always \
             ghcr.io/open-webui/open-webui:main
     fi
-    fi
     
     echo ""
     echo -e "${GREEN}✅ Open WebUI updated successfully!${NC}"
