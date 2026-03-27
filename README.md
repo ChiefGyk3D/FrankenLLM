@@ -386,6 +386,28 @@ You can add embedding models to a GPU for RAG (Retrieval Augmented Generation) i
 
 Then configure Open WebUI: **Admin > Settings > Documents > Embedding** — set Engine to Ollama, model to your embedding model, and URL to your GPU's port. See [docs/OPEN_WEBUI.md](docs/OPEN_WEBUI.md#rag-retrieval-augmented-generation) for full setup guide.
 
+### RAG Dataset Fetcher
+
+Build a comprehensive knowledge base for Open WebUI with curated cybersecurity, IT, and threat intel datasets:
+
+```bash
+# List available datasets
+python3 scripts/fetch-rag-datasets.py --list
+
+# Fetch all datasets (OWASP, MITRE ATT&CK, NVD CVEs, Sigma rules, Arch Wiki, RFCs, etc.)
+python3 scripts/fetch-rag-datasets.py --datasets all
+
+# Fetch by category
+python3 scripts/fetch-rag-datasets.py --category high-value    # OWASP, MITRE, NVD, NIST, CIS
+python3 scripts/fetch-rag-datasets.py --category day-to-day    # Arch Wiki, RFCs, K8s, Docker, Ansible
+python3 scripts/fetch-rag-datasets.py --category threat-intel  # CISA KEV, Sigma, Elastic rules
+
+# Fetch and upload to Open WebUI
+python3 scripts/fetch-rag-datasets.py --datasets all --upload --api-key sk-xxx
+```
+
+No dependencies required — pure Python stdlib. See [docs/RAG_DATASETS.md](docs/RAG_DATASETS.md) for full documentation.
+
 ### Interactive Chat
 
 ```bash

@@ -39,3 +39,6 @@ Thumbs.db
 # Pipeline data (Wikipedia dumps, extracted articles, state)
 wiki-pipeline-data/
 wiki_articles/
+
+# RAG dataset fetcher output
+rag-datasets/
