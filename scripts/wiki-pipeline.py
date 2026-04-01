@@ -777,10 +777,29 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
                     eta_h = eta_s // 3600
                     eta_m = (eta_s % 3600) // 60
                     failed = state.data["upload"]["files_failed"]
+
+                    # Adaptive rate display
+                    if rate >= 1.0:
+                        rate_str = f"{rate:.1f} files/s"
+                    elif rate > 0:
+                        fpm = rate * 60
+                        spf = 1.0 / rate
+                        rate_str = f"{fpm:.1f} files/min ({spf:.0f}s/file)"
+                    else:
+                        rate_str = "calculating..."
+
+                    # For batch mode, show article throughput too
+                    batch_info = ""
+                    batch_sz = (config.batch_size if config else 0) or \
+                               state.data.get("consolidate", {}).get("batch_size", 0)
+                    if batch_sz > 0 and "_batch_" in (state.data["upload"].get("last_uploaded_file") or ""):
+                        art_per_min = rate * 60 * batch_sz
+                        batch_info = f" (~{art_per_min:.0f} articles/min)"
+
                     log.info(
                         f"  Progress: {uploaded_count}/{total} "
                         f"({uploaded_count/total*100:.1f}%) | "
-                        f"{rate:.1f} files/s | "
+                        f"{rate_str}{batch_info} | "
                         f"ETA: {eta_h}h {eta_m}m | "
                         f"failed: {failed}"
                     )

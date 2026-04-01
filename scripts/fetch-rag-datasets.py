@@ -1152,6 +1152,252 @@ def fetch_elastic_detection(output_dir: Path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Custom Sources (user-defined via JSON config)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DEFAULT_CUSTOM_SOURCES = {
+    "_comment": "Add your own data sources here. Each entry becomes a fetchable dataset.",
+    "sources": [
+        {
+            "name": "example-github-markdown",
+            "type": "github-dir",
+            "category": "custom",
+            "description": "Example: Markdown files from a GitHub repo directory",
+            "repo": "owner/repo",
+            "path": "docs",
+            "file_ext": ".md",
+            "source_label": "My Custom Docs",
+            "enabled": False
+        },
+        {
+            "name": "example-url-list",
+            "type": "url-list",
+            "category": "custom",
+            "description": "Example: Download specific files by URL",
+            "source_label": "My URL Collection",
+            "urls": [
+                {"url": "https://example.com/doc1.txt", "filename": "doc1.txt"},
+                {"url": "https://example.com/doc2.txt", "filename": "doc2.txt"}
+            ],
+            "enabled": False
+        },
+        {
+            "name": "example-github-releases",
+            "type": "github-releases",
+            "category": "custom",
+            "description": "Example: Text from GitHub release notes",
+            "repo": "owner/repo",
+            "max_releases": 20,
+            "source_label": "Release Notes",
+            "enabled": False
+        }
+    ]
+}
+
+
+def generate_sources_file(path: str):
+    """Write an example custom sources JSON file."""
+    with open(path, "w") as f:
+        json.dump(DEFAULT_CUSTOM_SOURCES, f, indent=2)
+    print(f"Custom sources template written to {path}")
+    print(f"Edit the file to add your own sources, then run with --sources {path}")
+    print()
+    print("Supported source types:")
+    print("  github-dir       — Download files from a GitHub repo directory")
+    print("  url-list         — Download files from a list of URLs")
+    print("  github-releases  — Extract text from GitHub release notes")
+    print()
+    print('Set "enabled": true on sources you want to fetch.')
+
+
+def load_custom_sources(path: str):
+    """Load custom sources from JSON and register them as datasets."""
+    with open(path) as f:
+        data = json.load(f)
+
+    sources = data.get("sources", [])
+    loaded = 0
+
+    for src in sources:
+        if not src.get("enabled", True):
+            continue
+
+        name = src["name"]
+        src_type = src["type"]
+        category = src.get("category", "custom")
+        description = src.get("description", f"Custom: {name}")
+
+        if src_type == "github-dir":
+            fetcher = _make_github_dir_fetcher(src)
+        elif src_type == "url-list":
+            fetcher = _make_url_list_fetcher(src)
+        elif src_type == "github-releases":
+            fetcher = _make_github_releases_fetcher(src)
+        else:
+            log.warning(f"Unknown source type '{src_type}' for '{name}', skipping")
+            continue
+
+        DATASETS[name] = {
+            "func": fetcher,
+            "category": category,
+            "description": description,
+        }
+        loaded += 1
+
+    return loaded
+
+
+def _make_github_dir_fetcher(src: dict):
+    """Create a fetcher function for a GitHub directory source."""
+    repo = src["repo"]
+    path = src.get("path", "")
+    file_ext = src.get("file_ext", ".md")
+    source_label = src.get("source_label", repo)
+    dir_name = sanitize_filename(src["name"])
+    max_files = src.get("max_files", 500)
+
+    def fetcher(output_dir: Path) -> int:
+        ds_dir = output_dir / dir_name
+        ds_dir.mkdir(parents=True, exist_ok=True)
+
+        api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+        log.info(f"Fetching from {repo}/{path}...")
+
+        try:
+            files = http_get_json(api_url)
+        except Exception as e:
+            log.error(f"Failed to list {repo}/{path}: {e}")
+            return 0
+
+        if not isinstance(files, list):
+            log.error(f"Expected directory listing from {api_url}")
+            return 0
+
+        targets = [f for f in files
+                   if isinstance(f, dict) and f.get("name", "").endswith(file_ext)]
+        targets = targets[:max_files]
+        log.info(f"Found {len(targets)} {file_ext} files")
+
+        count = 0
+        for i, f_info in enumerate(targets):
+            safe_name = sanitize_filename(
+                f_info["name"].replace(file_ext, "")
+            ) + ".txt"
+            filepath = ds_dir / safe_name
+
+            if filepath.exists() and filepath.stat().st_size > 50:
+                count += 1
+                continue
+
+            try:
+                content = http_get(f_info["download_url"])
+                if file_ext == ".md":
+                    content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+
+                with open(filepath, "w", encoding="utf-8") as out:
+                    out.write(f"# {f_info['name'].replace(file_ext, '')}\n\n")
+                    out.write(f"Source: {source_label}\n\n")
+                    out.write(content)
+                count += 1
+                time.sleep(0.5)
+            except Exception as e:
+                log.warning(f"  Failed: {f_info['name']}: {e}")
+
+            if (i + 1) % 25 == 0:
+                log.info(f"  [{i+1}/{len(targets)}] downloaded")
+
+        log.info(f"{dir_name}: {count} files saved")
+        return count
+
+    return fetcher
+
+
+def _make_url_list_fetcher(src: dict):
+    """Create a fetcher function for a URL list source."""
+    source_label = src.get("source_label", src["name"])
+    dir_name = sanitize_filename(src["name"])
+    urls = src.get("urls", [])
+
+    def fetcher(output_dir: Path) -> int:
+        ds_dir = output_dir / dir_name
+        ds_dir.mkdir(parents=True, exist_ok=True)
+
+        count = 0
+        for entry in urls:
+            url = entry["url"]
+            filename = sanitize_filename(entry.get("filename", url.rsplit("/", 1)[-1]))
+            if not filename.endswith(".txt"):
+                filename += ".txt"
+            filepath = ds_dir / filename
+
+            if filepath.exists() and filepath.stat().st_size > 50:
+                count += 1
+                continue
+
+            try:
+                content = http_get(url)
+                with open(filepath, "w", encoding="utf-8") as out:
+                    out.write(f"Source: {source_label}\n\n")
+                    out.write(content)
+                count += 1
+                time.sleep(0.3)
+            except Exception as e:
+                log.warning(f"  Failed: {url}: {e}")
+
+        log.info(f"{dir_name}: {count} files saved")
+        return count
+
+    return fetcher
+
+
+def _make_github_releases_fetcher(src: dict):
+    """Create a fetcher function for GitHub release notes."""
+    repo = src["repo"]
+    source_label = src.get("source_label", f"{repo} releases")
+    dir_name = sanitize_filename(src["name"])
+    max_releases = src.get("max_releases", 20)
+
+    def fetcher(output_dir: Path) -> int:
+        ds_dir = output_dir / dir_name
+        ds_dir.mkdir(parents=True, exist_ok=True)
+
+        api_url = f"https://api.github.com/repos/{repo}/releases?per_page={max_releases}"
+        log.info(f"Fetching releases from {repo}...")
+
+        try:
+            releases = http_get_json(api_url)
+        except Exception as e:
+            log.error(f"Failed to fetch releases from {repo}: {e}")
+            return 0
+
+        count = 0
+        for rel in releases:
+            tag = rel.get("tag_name", "unknown")
+            body = rel.get("body", "")
+            if not body or not body.strip():
+                continue
+
+            safe_name = sanitize_filename(f"{tag}") + ".txt"
+            filepath = ds_dir / safe_name
+
+            if filepath.exists() and filepath.stat().st_size > 50:
+                count += 1
+                continue
+
+            with open(filepath, "w", encoding="utf-8") as out:
+                out.write(f"# {rel.get('name', tag)}\n\n")
+                out.write(f"Source: {source_label}\nVersion: {tag}\n")
+                out.write(f"Date: {rel.get('published_at', 'N/A')}\n\n")
+                out.write(body)
+            count += 1
+
+        log.info(f"{dir_name}: {count} release notes saved")
+        return count
+
+    return fetcher
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Upload to Open WebUI
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1277,14 +1523,24 @@ def list_datasets():
             categories[cat] = []
         categories[cat].append((name, info["description"]))
 
-    for cat in ["high-value", "day-to-day", "threat-intel"]:
+    for cat in ["high-value", "day-to-day", "threat-intel", "custom"]:
         if cat not in categories:
+            continue
+        print(f"\n  [{cat.upper()}]")
+        for name, desc in categories[cat]:
+            print(f"    {name:25s} {desc}")
+
+    # Show any other categories from custom sources
+    for cat in sorted(categories.keys()):
+        if cat in ("high-value", "day-to-day", "threat-intel", "custom"):
             continue
         print(f"\n  [{cat.upper()}]")
         for name, desc in categories[cat]:
             print(f"    {name:25s} {desc}")
     print()
     print("Usage: --datasets <name1> <name2> ...  OR  --category <category>  OR  --datasets all")
+    print("       --sources my-sources.json       (load custom data sources)")
+    print("       --generate-sources FILE          (create template sources file)")
     print()
 
 
@@ -1292,11 +1548,30 @@ def main():
     parser = argparse.ArgumentParser(
         description="FrankenLLM - RAG Dataset Fetcher",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # List built-in datasets
+  python3 fetch-rag-datasets.py --list
+
+  # Fetch high-value cybersecurity datasets
+  python3 fetch-rag-datasets.py --category high-value
+
+  # Fetch everything and upload to Open WebUI
+  python3 fetch-rag-datasets.py --datasets all --upload --api-key sk-xxx
+
+  # Generate a custom sources template
+  python3 fetch-rag-datasets.py --generate-sources my-sources.json
+
+  # Load custom sources and list all available
+  python3 fetch-rag-datasets.py --sources my-sources.json --list
+
+  # Fetch custom + built-in datasets
+  python3 fetch-rag-datasets.py --sources my-sources.json --datasets all --upload --api-key sk-xxx
+        """,
     )
     parser.add_argument("--list", action="store_true", help="List available datasets")
     parser.add_argument("--datasets", nargs="+", help="Datasets to fetch (or 'all')")
-    parser.add_argument("--category", choices=["high-value", "day-to-day", "threat-intel"],
-                        help="Fetch all datasets in category")
+    parser.add_argument("--category", help="Fetch all datasets in a category")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR,
                         help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})")
     parser.add_argument("--upload", action="store_true",
@@ -1305,7 +1580,21 @@ def main():
                         help="Open WebUI API key")
     parser.add_argument("--webui-url", default=os.environ.get("OPENWEBUI_URL", DEFAULT_WEBUI_URL),
                         help=f"Open WebUI URL (default: {DEFAULT_WEBUI_URL})")
+    parser.add_argument("--sources", default=None,
+                        help="JSON file with custom data sources")
+    parser.add_argument("--generate-sources", metavar="FILE",
+                        help="Generate a custom sources template and exit")
     args = parser.parse_args()
+
+    # Handle --generate-sources
+    if args.generate_sources:
+        generate_sources_file(args.generate_sources)
+        return
+
+    # Load custom sources if provided
+    if args.sources:
+        loaded = load_custom_sources(args.sources)
+        print(f"Loaded {loaded} custom source(s) from {args.sources}")
 
     if args.list:
         list_datasets()
