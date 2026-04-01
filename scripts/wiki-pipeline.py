@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-FrankenLLM - Simple English Wikipedia RAG Pipeline
-Downloads, extracts, and uploads Simple English Wikipedia to Open WebUI.
+FrankenLLM - Wikipedia RAG Pipeline
+Downloads, extracts, and uploads Wikipedia articles to Open WebUI.
 
 Designed to run headless on the server (via tmux/screen).
 Resumable — tracks progress in a state file.
+Fully configurable via JSON config file or CLI flags.
 
 Usage:
+    # Generate a config file with defaults (edit to customize)
+    python3 scripts/wiki-pipeline.py --generate-config my-config.json
+
+    # Full pipeline using config
+    python3 scripts/wiki-pipeline.py --config my-config.json --api-key YOUR_KEY
+
     # Full pipeline (download → extract → upload)
     python3 scripts/wiki-pipeline.py --api-key YOUR_OPENWEBUI_API_KEY
 
@@ -32,12 +39,12 @@ Usage:
     # Full pipeline with batch mode (recommended for large wikis)
     python3 scripts/wiki-pipeline.py --batch-size 50 --fast --api-key YOUR_KEY
 
+    # Use a different Wikipedia (e.g., full English)
+    python3 scripts/wiki-pipeline.py --dump-url https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2 --api-key YOUR_KEY
+
 Environment variables (alternative to flags):
     OPENWEBUI_API_KEY   - API key for Open WebUI
     OPENWEBUI_URL       - Base URL (default: http://localhost:3000)
-
-Requirements:
-    pip install wikiextractor   (for XML dump extraction)
 """
 
 import argparse
@@ -59,18 +66,21 @@ from pathlib import Path
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-DUMP_URL = "https://dumps.wikimedia.org/simplewiki/latest/simplewiki-latest-pages-articles.xml.bz2"
-DUMP_FILENAME = "simplewiki-latest-pages-articles.xml.bz2"
 STATE_FILENAME = "wiki-pipeline-state.json"
 LOG_FILENAME = "wiki-pipeline.log"
 
+# Built-in defaults — override via config file or CLI flags
+DEFAULT_DUMP_URL = "https://dumps.wikimedia.org/simplewiki/latest/simplewiki-latest-pages-articles.xml.bz2"
 DEFAULT_WEBUI_URL = "http://localhost:3000"
 DEFAULT_MIN_LENGTH = 500       # Skip articles shorter than this (chars)
 DEFAULT_BATCH_SIZE = 50        # Articles per consolidated batch file
-DEFAULT_COLLECTION_NAME = "Simple English Wikipedia"
+DEFAULT_WORKERS = 3
+DEFAULT_SOURCE_LABEL = "Simple English Wikipedia"
+DEFAULT_COLLECTION_PREFIX = "Wikipedia"
 
-# Categories for auto-sorting articles into collections
-TOPIC_KEYWORDS = {
+# Default topic categories for auto-sorting articles into knowledge collections.
+# Customize via config file: add/remove/rename topics and keywords freely.
+DEFAULT_TOPIC_KEYWORDS = {
     "cybersecurity": [
         "security", "hacking", "malware", "ransomware", "phishing", "encryption",
         "firewall", "vulnerability", "cyber", "intrusion", "cryptography",
@@ -104,6 +114,84 @@ TOPIC_KEYWORDS = {
         "capitalism", "liberal", "conservative",
     ],
 }
+
+
+class PipelineConfig:
+    """Central configuration — loaded from defaults, config file, and CLI overrides."""
+
+    def __init__(self):
+        # Source
+        self.dump_url: str = DEFAULT_DUMP_URL
+        self.source_label: str = DEFAULT_SOURCE_LABEL
+        self.collection_prefix: str = DEFAULT_COLLECTION_PREFIX
+
+        # Processing
+        self.min_length: int = DEFAULT_MIN_LENGTH
+        self.batch_size: int = DEFAULT_BATCH_SIZE
+        self.workers: int = DEFAULT_WORKERS
+
+        # Upload
+        self.webui_url: str = DEFAULT_WEBUI_URL
+
+        # Topics
+        self.topics: dict[str, list[str]] = dict(DEFAULT_TOPIC_KEYWORDS)
+
+    @property
+    def dump_filename(self) -> str:
+        """Derive dump filename from URL."""
+        return self.dump_url.rstrip("/").rsplit("/", 1)[-1]
+
+    def to_dict(self) -> dict:
+        """Serialize to JSON-friendly dict."""
+        return {
+            "dump_url": self.dump_url,
+            "source_label": self.source_label,
+            "collection_prefix": self.collection_prefix,
+            "min_length": self.min_length,
+            "batch_size": self.batch_size,
+            "workers": self.workers,
+            "webui_url": self.webui_url,
+            "topics": self.topics,
+        }
+
+    def load_file(self, path: str):
+        """Load config from a JSON file, merging over defaults."""
+        with open(path) as f:
+            data = json.load(f)
+        for key in ("dump_url", "source_label", "collection_prefix", "webui_url"):
+            if key in data:
+                setattr(self, key, str(data[key]))
+        for key in ("min_length", "batch_size", "workers"):
+            if key in data:
+                setattr(self, key, int(data[key]))
+        if "topics" in data and isinstance(data["topics"], dict):
+            self.topics = {str(k): [str(w) for w in v] for k, v in data["topics"].items()}
+
+    def apply_cli(self, args):
+        """CLI flags override config file values (only if explicitly set)."""
+        if args.dump_url:
+            self.dump_url = args.dump_url
+        if args.source_label:
+            self.source_label = args.source_label
+        if args.collection_prefix:
+            self.collection_prefix = args.collection_prefix
+        if args.webui_url != DEFAULT_WEBUI_URL:
+            self.webui_url = args.webui_url
+        if args.min_length != DEFAULT_MIN_LENGTH:
+            self.min_length = args.min_length
+        if args.workers != DEFAULT_WORKERS:
+            self.workers = args.workers
+        if args.batch_size != 0:
+            self.batch_size = args.batch_size
+
+    @staticmethod
+    def generate(path: str):
+        """Write default config to a JSON file for customization."""
+        cfg = PipelineConfig()
+        with open(path, "w") as f:
+            json.dump(cfg.to_dict(), f, indent=2)
+        print(f"Default config written to {path}")
+        print("Edit topics, dump_url, source_label, etc. then run with --config {path}".format(path=path))
 
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
@@ -162,8 +250,9 @@ class PipelineState:
 
 # ─── Download ────────────────────────────────────────────────────────────────
 
-def download_dump(work_dir: Path, state: PipelineState, log: logging.Logger):
-    dump_path = work_dir / DUMP_FILENAME
+def download_dump(work_dir: Path, state: PipelineState, log: logging.Logger,
+                  config: PipelineConfig):
+    dump_path = work_dir / config.dump_filename
 
     if dump_path.exists() and state.data["download"]["completed"]:
         log.info(f"Dump already downloaded: {dump_path} ({dump_path.stat().st_size / 1e6:.0f} MB)")
@@ -172,11 +261,11 @@ def download_dump(work_dir: Path, state: PipelineState, log: logging.Logger):
     state.data["step"] = "download"
     state.save()
 
-    log.info(f"Downloading Simple English Wikipedia dump...")
-    log.info(f"URL: {DUMP_URL}")
+    log.info(f"Downloading Wikipedia dump...")
+    log.info(f"URL: {config.dump_url}")
     log.info(f"Destination: {dump_path}")
 
-    req = urllib.request.Request(DUMP_URL, headers={"User-Agent": "FrankenLLM-Wiki-Pipeline/1.0"})
+    req = urllib.request.Request(config.dump_url, headers={"User-Agent": "FrankenLLM-Wiki-Pipeline/1.0"})
 
     with urllib.request.urlopen(req, timeout=300) as response:
         total = int(response.headers.get("Content-Length", 0))
@@ -210,7 +299,8 @@ def download_dump(work_dir: Path, state: PipelineState, log: logging.Logger):
 # ─── Extract ─────────────────────────────────────────────────────────────────
 
 def extract_articles(work_dir: Path, dump_path: Path, min_length: int,
-                     state: PipelineState, log: logging.Logger) -> Path:
+                     state: PipelineState, log: logging.Logger,
+                     config: PipelineConfig) -> Path:
     articles_dir = work_dir / "articles"
 
     if state.data["extract"]["completed"] and articles_dir.exists():
@@ -269,7 +359,7 @@ def extract_articles(work_dir: Path, dump_path: Path, min_length: int,
                         skipped_short += 1
                     else:
                         # Categorize and save
-                        topic = categorize_article(current_title, current_text)
+                        topic = categorize_article(current_title, current_text, config)
                         topic_dir = articles_dir / topic
                         topic_dir.mkdir(parents=True, exist_ok=True)
 
@@ -278,7 +368,7 @@ def extract_articles(work_dir: Path, dump_path: Path, min_length: int,
 
                         with open(filepath, "w", encoding="utf-8") as out:
                             out.write(f"# {current_title}\n\n")
-                            out.write(f"Source: Simple English Wikipedia\n")
+                            out.write(f"Source: {config.source_label}\n")
                             out.write(f"Topic: {topic}\n\n")
                             out.write(current_text)
 
@@ -417,12 +507,12 @@ def clean_wikitext(text: str) -> str:
     return text
 
 
-def categorize_article(title: str, text: str) -> str:
+def categorize_article(title: str, text: str, config: PipelineConfig) -> str:
     """Assign an article to a topic based on title and content."""
     combined = (title + " " + text[:2000]).lower()
 
     scores = {}
-    for topic, keywords in TOPIC_KEYWORDS.items():
+    for topic, keywords in config.topics.items():
         score = sum(1 for kw in keywords if kw.lower() in combined)
         if score > 0:
             scores[topic] = score
@@ -579,7 +669,8 @@ def _upload_one(args_tuple):
 
 def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
                     state: PipelineState, log: logging.Logger,
-                    fast: bool = False, workers: int = 3):
+                    fast: bool = False, workers: int = 3,
+                    config: PipelineConfig = None):
     state.data["step"] = "upload"
     state.save()
 
@@ -617,11 +708,12 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
     log.info(f"Workers: {workers}")
 
     # Create or get knowledge collections per topic
+    cfg = config or PipelineConfig()
     topic_dirs = sorted([d for d in articles_dir.iterdir() if d.is_dir()])
     for topic_dir in topic_dirs:
         topic = topic_dir.name
         if topic not in state.data["upload"]["knowledge_ids"]:
-            knowledge_id = create_knowledge_collection(base_url, api_key, topic, log)
+            knowledge_id = create_knowledge_collection(base_url, api_key, topic, log, cfg)
             if knowledge_id:
                 state.data["upload"]["knowledge_ids"][topic] = knowledge_id
                 state.save()
@@ -722,11 +814,12 @@ def api_request(url: str, api_key: str, data=None, method="GET",
 
 
 def create_knowledge_collection(base_url: str, api_key: str, topic: str,
-                                log: logging.Logger) -> str | None:
+                                log: logging.Logger,
+                                config: PipelineConfig) -> str | None:
     """Create a knowledge collection in Open WebUI, return its ID."""
     url = f"{base_url}/api/v1/knowledge/create"
-    name = f"Wikipedia - {topic.replace('_', ' ').title()}"
-    description = f"Simple English Wikipedia articles about {topic}"
+    name = f"{config.collection_prefix} - {topic.replace('_', ' ').title()}"
+    description = f"{config.source_label} articles about {topic}"
 
     try:
         result = api_request(url, api_key, data={
@@ -904,12 +997,21 @@ def show_status(work_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FrankenLLM - Simple English Wikipedia RAG Pipeline",
+        description="FrankenLLM - Wikipedia RAG Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full pipeline
+  # Generate a config file (edit to customize topics, dump URL, etc.)
+  python3 wiki-pipeline.py --generate-config my-wiki.json
+
+  # Run with custom config
+  python3 wiki-pipeline.py --config my-wiki.json --api-key sk-xxx
+
+  # Full pipeline (Simple English Wikipedia by default)
   python3 wiki-pipeline.py --api-key sk-xxx
+
+  # Use a different Wikipedia dump
+  python3 wiki-pipeline.py --dump-url https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2 --api-key sk-xxx
 
   # Just download and extract
   python3 wiki-pipeline.py --step extract
@@ -946,11 +1048,34 @@ Examples:
                         help=f"Minimum article length in chars (default: {DEFAULT_MIN_LENGTH})")
     parser.add_argument("--fast", action="store_true",
                         help="Skip per-file embedding wait")
-    parser.add_argument("--workers", type=int, default=3,
-                        help="Concurrent upload workers (default: 3)")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
+                        help=f"Concurrent upload workers (default: {DEFAULT_WORKERS})")
     parser.add_argument("--batch-size", type=int, default=0,
                         help=f"Articles per batch file (0=upload individually, default: 0, recommended: 50)")
+
+    # Config & customization
+    parser.add_argument("--config", default=None,
+                        help="JSON config file (topics, dump URL, labels, etc.)")
+    parser.add_argument("--generate-config", metavar="FILE",
+                        help="Generate a default config file and exit")
+    parser.add_argument("--dump-url", default=None,
+                        help="Wikipedia dump URL (overrides config file)")
+    parser.add_argument("--source-label", default=None,
+                        help="Label written into articles, e.g. 'English Wikipedia' (overrides config)")
+    parser.add_argument("--collection-prefix", default=None,
+                        help="Knowledge collection name prefix, e.g. 'Wikipedia' (overrides config)")
     args = parser.parse_args()
+
+    # Handle --generate-config
+    if args.generate_config:
+        PipelineConfig.generate(args.generate_config)
+        return
+
+    # Build config: defaults → config file → CLI flags
+    config = PipelineConfig()
+    if args.config:
+        config.load_file(args.config)
+    config.apply_cli(args)
 
     work_dir = Path(args.work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -987,22 +1112,27 @@ Examples:
     log.info("=" * 60)
     log.info("FrankenLLM Wikipedia Pipeline")
     log.info(f"Step: {args.step}")
+    log.info(f"Source: {config.source_label}")
+    log.info(f"Dump: {config.dump_url}")
     log.info(f"Work dir: {work_dir}")
-    log.info(f"Min article length: {args.min_length} chars")
+    log.info(f"Topics: {', '.join(sorted(config.topics.keys()))} + general")
+    log.info(f"Min article length: {config.min_length} chars")
     if args.step in ("all", "upload"):
-        log.info(f"WebUI URL: {args.webui_url}")
+        log.info(f"WebUI URL: {config.webui_url}")
     if use_batches:
-        log.info(f"Batch mode: {args.batch_size or DEFAULT_BATCH_SIZE} articles per file")
+        log.info(f"Batch mode: {args.batch_size or config.batch_size} articles per file")
     else:
         log.info("Individual file mode (batch auto-detected if available)")
+    if args.config:
+        log.info(f"Config file: {args.config}")
     log.info("=" * 60)
 
     try:
         # Download
         if args.step in ("all", "download"):
-            dump_path = download_dump(work_dir, state, log)
+            dump_path = download_dump(work_dir, state, log, config)
         else:
-            dump_path = work_dir / DUMP_FILENAME
+            dump_path = work_dir / config.dump_filename
 
         # Extract
         if args.step in ("all", "extract", "download"):
@@ -1010,7 +1140,8 @@ Examples:
                 log.error(f"Dump file not found: {dump_path}")
                 log.error("Run with --step download first")
                 sys.exit(1)
-            articles_dir = extract_articles(work_dir, dump_path, args.min_length, state, log)
+            articles_dir = extract_articles(work_dir, dump_path, config.min_length,
+                                            state, log, config)
         else:
             articles_dir = work_dir / "articles"
 
@@ -1020,7 +1151,7 @@ Examples:
                 log.error(f"Articles directory not found: {articles_dir}")
                 log.error("Run with --step extract first")
                 sys.exit(1)
-            bs = args.batch_size if args.batch_size > 0 else DEFAULT_BATCH_SIZE
+            bs = args.batch_size if args.batch_size > 0 else config.batch_size
             batches_dir = consolidate_articles(work_dir, state, log, batch_size=bs)
 
         # Determine upload source directory
@@ -1036,12 +1167,12 @@ Examples:
                 upload_dir = work_dir / "batches"
                 log.info(f"Using batch files from {upload_dir}")
                 # Batch files are much larger; cap workers to avoid overwhelming server
-                effective_workers = min(args.workers, 1)
-                if effective_workers < args.workers:
-                    log.info(f"Batch mode: reducing workers from {args.workers} to {effective_workers}")
+                effective_workers = min(config.workers, 1)
+                if effective_workers < config.workers:
+                    log.info(f"Batch mode: reducing workers from {config.workers} to {effective_workers}")
             elif articles_dir.exists():
                 upload_dir = articles_dir
-                effective_workers = args.workers
+                effective_workers = config.workers
                 log.info(f"Using individual article files from {upload_dir}")
             else:
                 log.error("No files to upload. Run --step extract first")
@@ -1049,8 +1180,8 @@ Examples:
 
             if args.fast:
                 log.info("FAST MODE: skipping per-file embedding wait")
-            upload_to_webui(upload_dir, args.webui_url, args.api_key, state, log,
-                            fast=args.fast, workers=effective_workers)
+            upload_to_webui(upload_dir, config.webui_url, args.api_key, state, log,
+                            fast=args.fast, workers=effective_workers, config=config)
 
         log.info("Pipeline complete!")
         state.data["step"] = "done"
