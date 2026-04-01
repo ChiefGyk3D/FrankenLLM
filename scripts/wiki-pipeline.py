@@ -628,6 +628,10 @@ def add_file_to_knowledge(base_url: str, api_key: str, knowledge_id: str,
         return True
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
+        # Duplicate content = already uploaded, treat as success
+        if e.code == 400 and "Duplicate content" in body:
+            log.debug(f"Duplicate content for {file_id}, already exists — skipping")
+            return True
         log.error(f"Failed to add file {file_id} to knowledge {knowledge_id}: {e.code} {body}")
         return False
     except Exception as e:
