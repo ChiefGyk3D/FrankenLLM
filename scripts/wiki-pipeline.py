@@ -22,6 +22,9 @@ Usage:
     # Filter: only articles with 2000+ chars (skip stubs)
     python3 scripts/wiki-pipeline.py --min-length 2000 --api-key YOUR_KEY
 
+    # Fast mode: skip per-file embedding wait (~10x faster)
+    python3 scripts/wiki-pipeline.py --step upload --fast --api-key YOUR_KEY
+
 Environment variables (alternative to flags):
     OPENWEBUI_API_KEY   - API key for Open WebUI
     OPENWEBUI_URL       - Base URL (default: http://localhost:3000)
@@ -430,7 +433,7 @@ def sanitize_filename(name: str) -> str:
 # ─── Upload to Open WebUI ───────────────────────────────────────────────────
 
 def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
-                    state: PipelineState, log: logging.Logger):
+                    state: PipelineState, log: logging.Logger, fast: bool = False):
     state.data["step"] = "upload"
     state.save()
 
@@ -481,9 +484,10 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
             state.save()
             continue
 
-        # Wait for file processing to complete before adding to knowledge base
-        if not wait_for_file_processing(base_url, api_key, file_id, log, timeout=120):
-            log.warning(f"File processing may not be complete for {filepath.name}, adding anyway")
+        # Wait for file processing (skip in fast mode for ~10x speedup)
+        if not fast:
+            if not wait_for_file_processing(base_url, api_key, file_id, log, timeout=120):
+                log.warning(f"File processing may not be complete for {filepath.name}, adding anyway")
 
         # Add to knowledge collection
         if add_file_to_knowledge(base_url, api_key, knowledge_id, file_id, log):
@@ -501,8 +505,8 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
         if uploaded_count % 50 == 0:
             log.info(f"  Progress: {uploaded_count}/{len(all_files)} uploaded ({uploaded_count/len(all_files)*100:.1f}%)")
 
-        # Small delay to avoid overwhelming the API
-        time.sleep(0.3)
+        # Delay between uploads (shorter in fast mode)
+        time.sleep(0.1 if fast else 0.3)
 
     state.data["upload"]["completed"] = True
     state.save()
@@ -730,6 +734,8 @@ Examples:
                         help="Working directory for downloads and state (default: wiki-pipeline-data)")
     parser.add_argument("--min-length", type=int, default=DEFAULT_MIN_LENGTH,
                         help=f"Minimum article length in chars (default: {DEFAULT_MIN_LENGTH})")
+    parser.add_argument("--fast", action="store_true",
+                        help="Skip per-file embedding wait (~10x faster upload)")
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir).resolve()
@@ -793,7 +799,9 @@ Examples:
                 log.error(f"Articles directory not found: {articles_dir}")
                 log.error("Run with --step extract first")
                 sys.exit(1)
-            upload_to_webui(articles_dir, args.webui_url, args.api_key, state, log)
+            if args.fast:
+                log.info("FAST MODE: skipping per-file embedding wait")
+            upload_to_webui(articles_dir, args.webui_url, args.api_key, state, log, fast=args.fast)
 
         log.info("Pipeline complete!")
         state.data["step"] = "done"
