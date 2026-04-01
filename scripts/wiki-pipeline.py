@@ -502,6 +502,8 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
 
     # Process with thread pool
     last_save = time.time()
+    last_progress = time.time()
+    start_time = time.time()
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_upload_one, item): item for item in work}
@@ -522,16 +524,32 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
                 else:
                     state.data["upload"]["files_failed"] += 1
 
-                # Save state periodically (every 5s) rather than per-file
                 now = time.time()
+
+                # Save state every 5 seconds
                 if now - last_save >= 5:
                     state.data["upload"]["uploaded_files"] = list(already_uploaded)
                     state.save()
                     last_save = now
 
-                uploaded_count = len(already_uploaded)
-                if uploaded_count % 100 == 0:
-                    log.info(f"  Progress: {uploaded_count}/{total} uploaded ({uploaded_count/total*100:.1f}%)")
+                # Progress log every 30 seconds
+                if now - last_progress >= 30:
+                    uploaded_count = len(already_uploaded)
+                    elapsed = now - start_time
+                    rate = uploaded_count / elapsed if elapsed > 0 else 0
+                    remaining = total - uploaded_count
+                    eta_s = int(remaining / rate) if rate > 0 else 0
+                    eta_h = eta_s // 3600
+                    eta_m = (eta_s % 3600) // 60
+                    failed = state.data["upload"]["files_failed"]
+                    log.info(
+                        f"  Progress: {uploaded_count}/{total} "
+                        f"({uploaded_count/total*100:.1f}%) | "
+                        f"{rate:.1f} files/s | "
+                        f"ETA: {eta_h}h {eta_m}m | "
+                        f"failed: {failed}"
+                    )
+                    last_progress = now
 
     # Final state save
     state.data["upload"]["uploaded_files"] = list(already_uploaded)
