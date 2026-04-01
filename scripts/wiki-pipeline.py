@@ -514,6 +514,7 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
     last_save = time.time()
     last_progress = time.time()
     start_time = time.time()
+    start_count = len(already_uploaded)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_upload_one, item): item for item in work}
@@ -545,8 +546,9 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
                 # Progress log every 30 seconds
                 if now - last_progress >= 30:
                     uploaded_count = len(already_uploaded)
+                    new_this_session = uploaded_count - start_count
                     elapsed = now - start_time
-                    rate = uploaded_count / elapsed if elapsed > 0 else 0
+                    rate = new_this_session / elapsed if elapsed > 0 else 0
                     remaining = total - uploaded_count
                     eta_s = int(remaining / rate) if rate > 0 else 0
                     eta_h = eta_s // 3600
