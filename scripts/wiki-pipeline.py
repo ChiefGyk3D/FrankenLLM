@@ -696,7 +696,8 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
 
 
 def api_request(url: str, api_key: str, data=None, method="GET",
-                content_type="application/json", raw_data=None):
+                content_type="application/json", raw_data=None,
+                timeout: int = 120):
     """Make an authenticated API request to Open WebUI."""
     headers = {"Authorization": f"Bearer {api_key}"}
 
@@ -710,7 +711,7 @@ def api_request(url: str, api_key: str, data=None, method="GET",
     else:
         req = urllib.request.Request(url, headers=headers, method=method)
 
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -801,12 +802,14 @@ def wait_for_file_processing(base_url: str, api_key: str, file_id: str,
 
 
 def add_file_to_knowledge(base_url: str, api_key: str, knowledge_id: str,
-                          file_id: str, log: logging.Logger) -> bool:
+                          file_id: str, log: logging.Logger,
+                          timeout: int = 600) -> bool:
     """Add an uploaded file to a knowledge collection."""
     url = f"{base_url}/api/v1/knowledge/{knowledge_id}/file/add"
 
     try:
-        api_request(url, api_key, data={"file_id": file_id}, method="POST")
+        api_request(url, api_key, data={"file_id": file_id}, method="POST",
+                    timeout=timeout)
         return True
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
@@ -985,7 +988,7 @@ Examples:
     if use_batches:
         log.info(f"Batch mode: {args.batch_size or DEFAULT_BATCH_SIZE} articles per file")
     else:
-        log.info("Individual file mode")
+        log.info("Individual file mode (batch auto-detected if available)")
     log.info("=" * 60)
 
     try:
@@ -1026,8 +1029,13 @@ Examples:
             if (work_dir / "batches").exists() and any((work_dir / "batches").iterdir()):
                 upload_dir = work_dir / "batches"
                 log.info(f"Using batch files from {upload_dir}")
+                # Batch files are much larger; cap workers to avoid overwhelming server
+                effective_workers = min(args.workers, 1)
+                if effective_workers < args.workers:
+                    log.info(f"Batch mode: reducing workers from {args.workers} to {effective_workers}")
             elif articles_dir.exists():
                 upload_dir = articles_dir
+                effective_workers = args.workers
                 log.info(f"Using individual article files from {upload_dir}")
             else:
                 log.error("No files to upload. Run --step extract first")
@@ -1036,7 +1044,7 @@ Examples:
             if args.fast:
                 log.info("FAST MODE: skipping per-file embedding wait")
             upload_to_webui(upload_dir, args.webui_url, args.api_key, state, log,
-                            fast=args.fast, workers=args.workers)
+                            fast=args.fast, workers=effective_workers)
 
         log.info("Pipeline complete!")
         state.data["step"] = "done"
