@@ -25,6 +25,13 @@ Usage:
     # Fast mode: skip per-file embedding wait (~10x faster)
     python3 scripts/wiki-pipeline.py --step upload --fast --api-key YOUR_KEY
 
+    # Batch mode: consolidate articles into larger files before upload (~50x faster)
+    python3 scripts/wiki-pipeline.py --step consolidate --batch-size 50
+    python3 scripts/wiki-pipeline.py --step upload --fast --api-key YOUR_KEY
+
+    # Full pipeline with batch mode (recommended for large wikis)
+    python3 scripts/wiki-pipeline.py --batch-size 50 --fast --api-key YOUR_KEY
+
 Environment variables (alternative to flags):
     OPENWEBUI_API_KEY   - API key for Open WebUI
     OPENWEBUI_URL       - Base URL (default: http://localhost:3000)
@@ -59,7 +66,7 @@ LOG_FILENAME = "wiki-pipeline.log"
 
 DEFAULT_WEBUI_URL = "http://localhost:3000"
 DEFAULT_MIN_LENGTH = 500       # Skip articles shorter than this (chars)
-DEFAULT_BATCH_SIZE = 5         # Files per batch upload
+DEFAULT_BATCH_SIZE = 50        # Articles per consolidated batch file
 DEFAULT_COLLECTION_NAME = "Simple English Wikipedia"
 
 # Categories for auto-sorting articles into collections
@@ -425,6 +432,106 @@ def categorize_article(title: str, text: str) -> str:
     return "general"
 
 
+# ─── Consolidate ─────────────────────────────────────────────────────────────
+
+def consolidate_articles(work_dir: Path, state: PipelineState,
+                         log: logging.Logger, batch_size: int = 50) -> Path:
+    """Merge individual article files into larger batch files for faster upload.
+
+    Instead of uploading 171K tiny files (each triggering server-side processing),
+    this merges them into ~batch_size-article files separated by clear markers.
+    Open WebUI's chunking will still split them for embedding.
+
+    articles/              →  batches/
+      general/                  general/
+        Article1.txt              general_batch_001.txt  (50 articles)
+        Article2.txt              general_batch_002.txt  (50 articles)
+        ...                       ...
+    """
+    articles_dir = work_dir / "articles"
+    batches_dir = work_dir / "batches"
+
+    if not articles_dir.exists():
+        log.error(f"Articles directory not found: {articles_dir}")
+        log.error("Run --step extract first")
+        return batches_dir
+
+    # Check if already consolidated
+    if batches_dir.exists() and state.data.get("consolidate", {}).get("completed"):
+        count = sum(1 for _ in batches_dir.rglob("*.txt"))
+        log.info(f"Already consolidated: {count} batch files in {batches_dir}")
+        return batches_dir
+
+    state.data["step"] = "consolidate"
+    state.data.setdefault("consolidate", {"completed": False, "batch_size": batch_size,
+                                           "batches_created": 0, "articles_batched": 0})
+    state.save()
+
+    log.info(f"Consolidating articles into batch files (batch_size={batch_size})...")
+    batches_dir.mkdir(parents=True, exist_ok=True)
+
+    total_batches = 0
+    total_articles = 0
+    separator = "\n\n" + "=" * 80 + "\n\n"
+
+    topic_dirs = sorted([d for d in articles_dir.iterdir() if d.is_dir()])
+
+    for topic_dir in topic_dirs:
+        topic = topic_dir.name
+        topic_batch_dir = batches_dir / topic
+        topic_batch_dir.mkdir(parents=True, exist_ok=True)
+
+        files = sorted(topic_dir.glob("*.txt"))
+        log.info(f"  {topic}: {len(files)} articles → ~{(len(files) + batch_size - 1) // batch_size} batches")
+
+        batch_num = 0
+        batch_buffer = []
+        batch_articles = 0
+
+        for filepath in files:
+            try:
+                content = filepath.read_text(encoding="utf-8")
+                if content.strip():
+                    batch_buffer.append(content)
+                    batch_articles += 1
+                    total_articles += 1
+            except Exception as e:
+                log.warning(f"  Skipping {filepath.name}: {e}")
+                continue
+
+            if len(batch_buffer) >= batch_size:
+                batch_num += 1
+                batch_path = topic_batch_dir / f"{topic}_batch_{batch_num:04d}.txt"
+                batch_path.write_text(separator.join(batch_buffer), encoding="utf-8")
+                total_batches += 1
+                batch_buffer = []
+
+        # Write remaining articles in final batch
+        if batch_buffer:
+            batch_num += 1
+            batch_path = topic_batch_dir / f"{topic}_batch_{batch_num:04d}.txt"
+            batch_path.write_text(separator.join(batch_buffer), encoding="utf-8")
+            total_batches += 1
+
+    state.data["consolidate"]["completed"] = True
+    state.data["consolidate"]["batches_created"] = total_batches
+    state.data["consolidate"]["articles_batched"] = total_articles
+    state.data["consolidate"]["batch_size"] = batch_size
+    state.save()
+
+    log.info(f"Consolidation complete:")
+    log.info(f"  {total_articles} articles → {total_batches} batch files")
+    log.info(f"  Batch size: ~{batch_size} articles per file")
+
+    # Show per-topic stats
+    for topic_dir in sorted(batches_dir.iterdir()):
+        if topic_dir.is_dir():
+            count = sum(1 for _ in topic_dir.glob("*.txt"))
+            log.info(f"    {topic_dir.name}: {count} batch files")
+
+    return batches_dir
+
+
 def sanitize_filename(name: str) -> str:
     """Create a filesystem-safe filename."""
     name = re.sub(r'[^\w\s-]', '', name)
@@ -474,13 +581,31 @@ def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
     already_uploaded = set(state.data["upload"].get("uploaded_files", []))
     state_lock = threading.Lock()
 
-    # Gather all article files
+    # Gather all files to upload
     all_files = sorted(articles_dir.rglob("*.txt"))
     total = len(all_files)
+
+    # Detect mode switch (individual → batch or vice versa): if the old
+    # uploaded_files list doesn't match the current file paths, reset upload state
+    if already_uploaded:
+        sample_old = next(iter(already_uploaded))
+        sample_new = str(all_files[0].relative_to(articles_dir)) if all_files else ""
+        # If old paths have "batch" but new don't (or vice versa), clear state
+        old_is_batch = "_batch_" in sample_old
+        new_is_batch = "_batch_" in sample_new
+        if old_is_batch != new_is_batch:
+            log.info("Upload mode changed (individual ↔ batch), resetting upload state")
+            already_uploaded = set()
+            state.data["upload"]["uploaded_files"] = []
+            state.data["upload"]["files_uploaded"] = 0
+            state.data["upload"]["files_failed"] = 0
+            state.data["upload"]["completed"] = False
+            # Keep knowledge_ids — collections are reusable
+
     state.data["upload"]["files_total"] = total
     state.save()
 
-    log.info(f"Found {total} articles to upload")
+    log.info(f"Found {total} files to upload")
     log.info(f"Already uploaded: {len(already_uploaded)}")
     log.info(f"Remaining: {total - len(already_uploaded)}")
     log.info(f"Workers: {workers}")
@@ -726,6 +851,14 @@ def show_status(work_dir: Path):
     print(f"    Articles:   {ext.get('articles_extracted', 0)}")
     print()
 
+    con = data.get("consolidate", {})
+    if con:
+        print(f"  Consolidate:")
+        print(f"    Completed:  {'✅' if con.get('completed') else '❌'}")
+        print(f"    Batches:    {con.get('batches_created', 0)} (batch_size={con.get('batch_size', 'N/A')})")
+        print(f"    Articles:   {con.get('articles_batched', 0)}")
+        print()
+
     up = data.get("upload", {})
     total = up.get("files_total", 0)
     uploaded = up.get("files_uploaded", 0)
@@ -775,6 +908,13 @@ Examples:
   # Resume upload
   python3 wiki-pipeline.py --step upload --api-key sk-xxx
 
+  # Batch mode (recommended): consolidate then upload
+  python3 wiki-pipeline.py --step consolidate --batch-size 50
+  python3 wiki-pipeline.py --step upload --fast --api-key sk-xxx
+
+  # Full pipeline with batching
+  python3 wiki-pipeline.py --batch-size 50 --fast --api-key sk-xxx
+
   # Check progress
   python3 wiki-pipeline.py --step status
 
@@ -785,7 +925,7 @@ Examples:
   # tmux attach -t wiki to reattach
         """,
     )
-    parser.add_argument("--step", choices=["all", "download", "extract", "upload", "status"],
+    parser.add_argument("--step", choices=["all", "download", "extract", "consolidate", "upload", "status"],
                         default="all", help="Which step to run (default: all)")
     parser.add_argument("--api-key", default=os.environ.get("OPENWEBUI_API_KEY"),
                         help="Open WebUI API key (or set OPENWEBUI_API_KEY env var)")
@@ -799,6 +939,8 @@ Examples:
                         help="Skip per-file embedding wait")
     parser.add_argument("--workers", type=int, default=3,
                         help="Concurrent upload workers (default: 3)")
+    parser.add_argument("--batch-size", type=int, default=0,
+                        help=f"Articles per batch file (0=upload individually, default: 0, recommended: 50)")
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir).resolve()
@@ -815,6 +957,9 @@ Examples:
         print("  Generate one in Open WebUI: Settings > Account > API Keys")
         print("  Or set OPENWEBUI_API_KEY environment variable")
         sys.exit(1)
+
+    # If --batch-size given with --step all, auto-include consolidate
+    use_batches = args.batch_size > 0 or args.step == "consolidate"
 
     log = setup_logging(work_dir)
     state = PipelineState(work_dir / STATE_FILENAME)
@@ -837,6 +982,10 @@ Examples:
     log.info(f"Min article length: {args.min_length} chars")
     if args.step in ("all", "upload"):
         log.info(f"WebUI URL: {args.webui_url}")
+    if use_batches:
+        log.info(f"Batch mode: {args.batch_size or DEFAULT_BATCH_SIZE} articles per file")
+    else:
+        log.info("Individual file mode")
     log.info("=" * 60)
 
     try:
@@ -856,15 +1005,37 @@ Examples:
         else:
             articles_dir = work_dir / "articles"
 
-        # Upload
-        if args.step in ("all", "upload"):
+        # Consolidate (batch mode)
+        if use_batches and args.step in ("all", "consolidate"):
             if not articles_dir.exists():
                 log.error(f"Articles directory not found: {articles_dir}")
                 log.error("Run with --step extract first")
                 sys.exit(1)
+            bs = args.batch_size if args.batch_size > 0 else DEFAULT_BATCH_SIZE
+            batches_dir = consolidate_articles(work_dir, state, log, batch_size=bs)
+
+        # Determine upload source directory
+        if use_batches:
+            upload_dir = work_dir / "batches"
+        else:
+            upload_dir = articles_dir
+
+        # Upload
+        if args.step in ("all", "upload"):
+            # Auto-detect: if batches/ exists, use it
+            if (work_dir / "batches").exists() and any((work_dir / "batches").iterdir()):
+                upload_dir = work_dir / "batches"
+                log.info(f"Using batch files from {upload_dir}")
+            elif articles_dir.exists():
+                upload_dir = articles_dir
+                log.info(f"Using individual article files from {upload_dir}")
+            else:
+                log.error("No files to upload. Run --step extract first")
+                sys.exit(1)
+
             if args.fast:
                 log.info("FAST MODE: skipping per-file embedding wait")
-            upload_to_webui(articles_dir, args.webui_url, args.api_key, state, log,
+            upload_to_webui(upload_dir, args.webui_url, args.api_key, state, log,
                             fast=args.fast, workers=args.workers)
 
         log.info("Pipeline complete!")
