@@ -41,10 +41,12 @@ import os
 import re
 import signal
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -432,82 +434,107 @@ def sanitize_filename(name: str) -> str:
 
 # ─── Upload to Open WebUI ───────────────────────────────────────────────────
 
+def _upload_one(args_tuple):
+    """Upload a single file and add it to its knowledge collection.
+    Returns (rel_path, success: bool).
+    Runs in a thread pool worker.
+    """
+    base_url, api_key, filepath, articles_dir, knowledge_id, fast, log = args_tuple
+    rel_path = str(filepath.relative_to(articles_dir))
+
+    file_id = upload_file(base_url, api_key, filepath, log)
+    if not file_id:
+        return rel_path, False
+
+    if not fast:
+        if not wait_for_file_processing(base_url, api_key, file_id, log, timeout=120):
+            log.warning(f"File processing may not be complete for {filepath.name}, adding anyway")
+
+    ok = add_file_to_knowledge(base_url, api_key, knowledge_id, file_id, log)
+    return rel_path, ok
+
+
 def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
-                    state: PipelineState, log: logging.Logger, fast: bool = False):
+                    state: PipelineState, log: logging.Logger,
+                    fast: bool = False, workers: int = 5):
     state.data["step"] = "upload"
     state.save()
 
     base_url = webui_url.rstrip("/")
     already_uploaded = set(state.data["upload"].get("uploaded_files", []))
+    state_lock = threading.Lock()
 
     # Gather all article files
     all_files = sorted(articles_dir.rglob("*.txt"))
-    state.data["upload"]["files_total"] = len(all_files)
+    total = len(all_files)
+    state.data["upload"]["files_total"] = total
     state.save()
 
-    log.info(f"Found {len(all_files)} articles to upload")
+    log.info(f"Found {total} articles to upload")
     log.info(f"Already uploaded: {len(already_uploaded)}")
-    log.info(f"Remaining: {len(all_files) - len(already_uploaded)}")
+    log.info(f"Remaining: {total - len(already_uploaded)}")
+    log.info(f"Workers: {workers}")
 
     # Create or get knowledge collections per topic
     topic_dirs = sorted([d for d in articles_dir.iterdir() if d.is_dir()])
     for topic_dir in topic_dirs:
         topic = topic_dir.name
         if topic not in state.data["upload"]["knowledge_ids"]:
-            knowledge_id = create_knowledge_collection(
-                base_url, api_key, topic, log
-            )
+            knowledge_id = create_knowledge_collection(base_url, api_key, topic, log)
             if knowledge_id:
                 state.data["upload"]["knowledge_ids"][topic] = knowledge_id
                 state.save()
             else:
                 log.error(f"Failed to create knowledge collection for '{topic}', skipping")
-                continue
 
-    # Upload files
-    for i, filepath in enumerate(all_files):
+    # Build work queue (files not yet uploaded)
+    work = []
+    for filepath in all_files:
         rel_path = str(filepath.relative_to(articles_dir))
-
         if rel_path in already_uploaded:
             continue
-
         topic = filepath.parent.name
         knowledge_id = state.data["upload"]["knowledge_ids"].get(topic)
         if not knowledge_id:
             log.warning(f"No knowledge collection for topic '{topic}', skipping {filepath.name}")
             continue
+        work.append((base_url, api_key, filepath, articles_dir, knowledge_id, fast, log))
 
-        # Upload file
-        file_id = upload_file(base_url, api_key, filepath, log)
-        if not file_id:
-            state.data["upload"]["files_failed"] += 1
-            state.save()
-            continue
+    # Process with thread pool
+    last_save = time.time()
 
-        # Wait for file processing (skip in fast mode for ~10x speedup)
-        if not fast:
-            if not wait_for_file_processing(base_url, api_key, file_id, log, timeout=120):
-                log.warning(f"File processing may not be complete for {filepath.name}, adding anyway")
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_upload_one, item): item for item in work}
+        for future in as_completed(futures):
+            try:
+                rel_path, ok = future.result()
+            except Exception as e:
+                log.error(f"Worker exception: {e}")
+                with state_lock:
+                    state.data["upload"]["files_failed"] += 1
+                continue
 
-        # Add to knowledge collection
-        if add_file_to_knowledge(base_url, api_key, knowledge_id, file_id, log):
-            already_uploaded.add(rel_path)
-            state.data["upload"]["uploaded_files"] = list(already_uploaded)
-            state.data["upload"]["files_uploaded"] = len(already_uploaded)
-            state.data["upload"]["last_uploaded_file"] = rel_path
-            state.save()
-        else:
-            state.data["upload"]["files_failed"] += 1
-            state.save()
+            with state_lock:
+                if ok:
+                    already_uploaded.add(rel_path)
+                    state.data["upload"]["files_uploaded"] = len(already_uploaded)
+                    state.data["upload"]["last_uploaded_file"] = rel_path
+                else:
+                    state.data["upload"]["files_failed"] += 1
 
-        # Progress report every 50 files
-        uploaded_count = len(already_uploaded)
-        if uploaded_count % 50 == 0:
-            log.info(f"  Progress: {uploaded_count}/{len(all_files)} uploaded ({uploaded_count/len(all_files)*100:.1f}%)")
+                # Save state periodically (every 5s) rather than per-file
+                now = time.time()
+                if now - last_save >= 5:
+                    state.data["upload"]["uploaded_files"] = list(already_uploaded)
+                    state.save()
+                    last_save = now
 
-        # Delay between uploads (shorter in fast mode)
-        time.sleep(0.1 if fast else 0.3)
+                uploaded_count = len(already_uploaded)
+                if uploaded_count % 100 == 0:
+                    log.info(f"  Progress: {uploaded_count}/{total} uploaded ({uploaded_count/total*100:.1f}%)")
 
+    # Final state save
+    state.data["upload"]["uploaded_files"] = list(already_uploaded)
     state.data["upload"]["completed"] = True
     state.save()
     log.info(f"Upload complete: {len(already_uploaded)} files uploaded, {state.data['upload']['files_failed']} failed")
@@ -739,7 +766,9 @@ Examples:
     parser.add_argument("--min-length", type=int, default=DEFAULT_MIN_LENGTH,
                         help=f"Minimum article length in chars (default: {DEFAULT_MIN_LENGTH})")
     parser.add_argument("--fast", action="store_true",
-                        help="Skip per-file embedding wait (~10x faster upload)")
+                        help="Skip per-file embedding wait")
+    parser.add_argument("--workers", type=int, default=5,
+                        help="Concurrent upload workers (default: 5)")
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir).resolve()
@@ -805,7 +834,8 @@ Examples:
                 sys.exit(1)
             if args.fast:
                 log.info("FAST MODE: skipping per-file embedding wait")
-            upload_to_webui(articles_dir, args.webui_url, args.api_key, state, log, fast=args.fast)
+            upload_to_webui(articles_dir, args.webui_url, args.api_key, state, log,
+                            fast=args.fast, workers=args.workers)
 
         log.info("Pipeline complete!")
         state.data["step"] = "done"
