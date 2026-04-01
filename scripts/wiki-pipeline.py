@@ -548,6 +548,7 @@ def _upload_one(args_tuple):
     """
     base_url, api_key, filepath, articles_dir, knowledge_id, fast, log = args_tuple
     rel_path = str(filepath.relative_to(articles_dir))
+    is_batch = "_batch_" in filepath.name
 
     # Retry loop with exponential backoff
     for attempt in range(4):  # up to 4 attempts
@@ -559,8 +560,13 @@ def _upload_one(args_tuple):
         if not file_id:
             continue  # retry upload
 
-        if not fast:
-            if not wait_for_file_processing(base_url, api_key, file_id, log, timeout=120):
+        # Batch files are large (50+ articles); server MUST finish extracting
+        # content before we can add to knowledge, otherwise we get "content
+        # provided is empty".  For individual files, --fast can safely skip.
+        if is_batch or not fast:
+            proc_timeout = 600 if is_batch else 120
+            if not wait_for_file_processing(base_url, api_key, file_id, log,
+                                            timeout=proc_timeout):
                 log.warning(f"File processing may not be complete for {filepath.name}, adding anyway")
 
         ok = add_file_to_knowledge(base_url, api_key, knowledge_id, file_id, log)
