@@ -442,21 +442,31 @@ def _upload_one(args_tuple):
     base_url, api_key, filepath, articles_dir, knowledge_id, fast, log = args_tuple
     rel_path = str(filepath.relative_to(articles_dir))
 
-    file_id = upload_file(base_url, api_key, filepath, log)
-    if not file_id:
-        return rel_path, False
+    # Retry loop with exponential backoff
+    for attempt in range(4):  # up to 4 attempts
+        if attempt > 0:
+            wait = 2 ** attempt + (hash(rel_path) % 3)  # 2-6s, 4-8s, 8-12s
+            time.sleep(wait)
 
-    if not fast:
-        if not wait_for_file_processing(base_url, api_key, file_id, log, timeout=120):
-            log.warning(f"File processing may not be complete for {filepath.name}, adding anyway")
+        file_id = upload_file(base_url, api_key, filepath, log)
+        if not file_id:
+            continue  # retry upload
 
-    ok = add_file_to_knowledge(base_url, api_key, knowledge_id, file_id, log)
-    return rel_path, ok
+        if not fast:
+            if not wait_for_file_processing(base_url, api_key, file_id, log, timeout=120):
+                log.warning(f"File processing may not be complete for {filepath.name}, adding anyway")
+
+        ok = add_file_to_knowledge(base_url, api_key, knowledge_id, file_id, log)
+        if ok:
+            return rel_path, True
+        # If add_file failed with a non-duplicate error, retry the whole thing
+
+    return rel_path, False
 
 
 def upload_to_webui(articles_dir: Path, webui_url: str, api_key: str,
                     state: PipelineState, log: logging.Logger,
-                    fast: bool = False, workers: int = 5):
+                    fast: bool = False, workers: int = 3):
     state.data["step"] = "upload"
     state.save()
 
@@ -785,8 +795,8 @@ Examples:
                         help=f"Minimum article length in chars (default: {DEFAULT_MIN_LENGTH})")
     parser.add_argument("--fast", action="store_true",
                         help="Skip per-file embedding wait")
-    parser.add_argument("--workers", type=int, default=5,
-                        help="Concurrent upload workers (default: 5)")
+    parser.add_argument("--workers", type=int, default=3,
+                        help="Concurrent upload workers (default: 3)")
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir).resolve()
