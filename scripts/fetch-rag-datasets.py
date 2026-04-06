@@ -973,6 +973,958 @@ def fetch_terraform_docs(output_dir: Path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# MEDICAL / HEALTH DATASETS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataset("medlineplus", "medical",
+         "MedlinePlus Health Topics — NIH consumer health info")
+def fetch_medlineplus(output_dir: Path):
+    """Download MedlinePlus health topic summaries via the NLM web-services API."""
+    ds_dir = output_dir / "medlineplus"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # MedlinePlus Connect returns XML; we use their JSON health-topics endpoint
+    url = "https://connect.medlineplus.gov/service?mainSearchCriteria.v.cs=2.16.840.1.113883.6.90&knowledgeResponseType=application/json"
+    # Simpler approach: scrape the A-Z health topic list via their public XML feed
+    xml_url = "https://medlineplus.gov/xml/mplus_topics_2025-04-04.xml"  # updated quarterly
+    # Most reliable: use their web-services REST endpoint for health topics
+    topics_url = "https://wsearch.nlm.nih.gov/ws/query?db=healthTopics&term=health&retmax=1500"
+
+    log.info("Fetching MedlinePlus health topics...")
+
+    # Use the public XML topic list
+    try:
+        xml_data = http_get("https://medlineplus.gov/xml/mplus_topics_2026-04-04.xml", timeout=120)
+    except Exception:
+        # Fallback — the date in the filename changes quarterly
+        try:
+            xml_data = http_get("https://medlineplus.gov/xml/mplus_topics_2026-01-04.xml", timeout=120)
+        except Exception:
+            # Last resort: try fetching the topic index page
+            log.warning("MedlinePlus XML feed unavailable, using A-Z page scraping")
+            return _fetch_medlineplus_az(ds_dir)
+
+    # Parse XML health topics
+    count = 0
+    # Simple XML parsing — each <health-topic> has title, url, full-summary
+    topics = re.findall(
+        r'<health-topic[^>]*title="([^"]+)"[^>]*url="([^"]+)"[^>]*>'
+        r'(.*?)</health-topic>',
+        xml_data, re.DOTALL
+    )
+
+    for title, topic_url, body in topics:
+        summary_match = re.search(r'<full-summary>(.*?)</full-summary>', body, re.DOTALL)
+        if not summary_match:
+            continue
+        summary = summary_match.group(1)
+        # Strip HTML tags
+        summary = re.sub(r'<[^>]+>', '', summary).strip()
+        if len(summary) < 100:
+            continue
+
+        # Extract related groups/aliases
+        aliases = re.findall(r'<also-called>(.*?)</also-called>', body)
+        groups = re.findall(r'<group[^>]*url="[^"]*">([^<]+)</group>', body)
+
+        safe_name = sanitize_filename(title) + ".txt"
+        filepath = ds_dir / safe_name
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# {title}\n\n")
+            f.write("Source: MedlinePlus (U.S. National Library of Medicine)\n")
+            f.write("Category: Medical / Health\n")
+            if aliases:
+                f.write(f"Also Known As: {', '.join(aliases)}\n")
+            if groups:
+                f.write(f"Topic Groups: {', '.join(groups)}\n")
+            f.write(f"URL: {topic_url}\n\n")
+            f.write(summary)
+
+        count += 1
+
+    log.info(f"MedlinePlus: {count} health topics saved")
+    return count
+
+
+def _fetch_medlineplus_az(ds_dir: Path):
+    """Fallback: scrape MedlinePlus A-Z index pages."""
+    count = 0
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        url = f"https://medlineplus.gov/encyclopedia.html"
+        # The A-Z pages are hard to parse cleanly; just note we tried
+        pass
+    log.warning("MedlinePlus A-Z scrape not fully implemented — use XML feed")
+    return count
+
+
+@dataset("openfda", "medical",
+         "openFDA Drug Labels — FDA drug label data (indications, warnings, interactions)")
+def fetch_openfda(output_dir: Path):
+    """Download drug label summaries from openFDA API."""
+    ds_dir = output_dir / "openfda_drug_labels"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fetch top drugs by count, 500 at a time (API limit)
+    # We'll grab the most commonly searched drugs
+    base_url = "https://api.fda.gov/drug/label.json"
+    count = 0
+    skip = 0
+    batch_size = 100
+    max_drugs = 600
+
+    log.info("Fetching openFDA drug labels...")
+
+    while skip < max_drugs:
+        url = f"{base_url}?search=_exists_:openfda.brand_name&limit={batch_size}&skip={skip}"
+        try:
+            data = http_get_json(url, timeout=60)
+        except Exception as e:
+            log.warning(f"  openFDA: error at skip={skip}: {e}")
+            break
+
+        results = data.get("results", [])
+        if not results:
+            break
+
+        for drug in results:
+            openfda = drug.get("openfda", {})
+            brand_names = openfda.get("brand_name", ["Unknown"])
+            brand = brand_names[0] if brand_names else "Unknown"
+            generic_names = openfda.get("generic_name", [])
+
+            lines = [f"# {brand}\n"]
+            lines.append("Source: openFDA Drug Label Database")
+            lines.append("Category: Medical / Pharmacology\n")
+            if generic_names:
+                lines.append(f"Generic Name: {', '.join(generic_names)}")
+            manufacturers = openfda.get("manufacturer_name", [])
+            if manufacturers:
+                lines.append(f"Manufacturer: {', '.join(manufacturers[:3])}")
+            routes = openfda.get("route", [])
+            if routes:
+                lines.append(f"Route: {', '.join(routes)}")
+            lines.append("")
+
+            # Key sections
+            for section, label in [
+                ("indications_and_usage", "Indications and Usage"),
+                ("dosage_and_administration", "Dosage and Administration"),
+                ("warnings", "Warnings"),
+                ("adverse_reactions", "Adverse Reactions"),
+                ("drug_interactions", "Drug Interactions"),
+                ("contraindications", "Contraindications"),
+                ("mechanism_of_action", "Mechanism of Action"),
+                ("overdosage", "Overdosage"),
+            ]:
+                content = drug.get(section, [])
+                if content:
+                    text = content[0] if isinstance(content, list) else str(content)
+                    # Strip HTML
+                    text = re.sub(r'<[^>]+>', '', text).strip()
+                    if len(text) > 20:
+                        lines.append(f"## {label}\n")
+                        lines.append(text)
+                        lines.append("")
+
+            # Only save if we have meaningful content
+            full_text = "\n".join(lines)
+            if len(full_text) < 200:
+                continue
+
+            safe_name = sanitize_filename(brand) + ".txt"
+            filepath = ds_dir / safe_name
+
+            if not filepath.exists():
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(full_text)
+                count += 1
+
+        skip += batch_size
+        time.sleep(1)  # Rate limit
+
+    log.info(f"openFDA: {count} drug labels saved")
+    return count
+
+
+@dataset("icd10", "medical",
+         "WHO ICD-10 — International Classification of Diseases codes")
+def fetch_icd10(output_dir: Path):
+    """Download ICD-10 code descriptions from CMS public data."""
+    ds_dir = output_dir / "icd10_codes"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # CMS publishes ICD-10-CM code descriptions as a flat text file
+    url = "https://www.cms.gov/files/zip/2025-code-descriptions-tabular-order-updated-01172025.zip"
+    log.info("Downloading ICD-10 code descriptions...")
+
+    try:
+        zip_data = http_get(url, timeout=120, binary=True)
+    except Exception as e:
+        log.error(f"Failed to download ICD-10 data: {e}")
+        return 0
+
+    count = 0
+    current_chapter = None
+    chapter_lines = []
+
+    try:
+        with zipfile.ZipFile(BytesIO(zip_data)) as zf:
+            # Find the descriptions file
+            desc_file = None
+            for name in zf.namelist():
+                if "desc" in name.lower() and name.endswith(".txt"):
+                    desc_file = name
+                    break
+            if not desc_file:
+                # Fallback: take the biggest txt file
+                txt_files = [n for n in zf.namelist() if n.endswith(".txt")]
+                if txt_files:
+                    desc_file = txt_files[0]
+
+            if not desc_file:
+                log.error("No description file found in ICD-10 ZIP")
+                return 0
+
+            raw = zf.read(desc_file).decode("utf-8", errors="replace")
+    except Exception as e:
+        log.error(f"Failed to extract ICD-10 ZIP: {e}")
+        return 0
+
+    # Group codes by chapter (first letter or first 3 chars)
+    # ICD-10 codes: A00-B99 Infectious, C00-D49 Neoplasms, etc.
+    chapter_map = {
+        "A": "Infectious_and_Parasitic_Diseases", "B": "Infectious_and_Parasitic_Diseases",
+        "C": "Neoplasms", "D": "Blood_and_Immune_Disorders",
+        "E": "Endocrine_Nutritional_Metabolic",
+        "F": "Mental_Behavioral_Neurodevelopmental",
+        "G": "Nervous_System", "H": "Eye_Ear",
+        "I": "Circulatory_System", "J": "Respiratory_System",
+        "K": "Digestive_System", "L": "Skin_and_Subcutaneous",
+        "M": "Musculoskeletal", "N": "Genitourinary",
+        "O": "Pregnancy_Childbirth", "P": "Perinatal",
+        "Q": "Congenital_Malformations", "R": "Symptoms_Signs_Abnormal_Findings",
+        "S": "Injury_Poisoning", "T": "Injury_Poisoning",
+        "V": "External_Causes", "W": "External_Causes",
+        "X": "External_Causes", "Y": "External_Causes",
+        "Z": "Factors_Influencing_Health_Status",
+    }
+
+    chapters = {}  # chapter_name -> list of lines
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line or len(line) < 5:
+            continue
+        # Format: CODE  DESCRIPTION (space separated)
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
+        code, desc = parts
+        chapter_key = chapter_map.get(code[0], "Other")
+        if chapter_key not in chapters:
+            chapters[chapter_key] = []
+        chapters[chapter_key].append(f"{code}: {desc}")
+
+    for chapter_name, entries in chapters.items():
+        safe_name = sanitize_filename(f"ICD10_{chapter_name}") + ".txt"
+        filepath = ds_dir / safe_name
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            title = chapter_name.replace("_", " ")
+            f.write(f"# ICD-10: {title}\n\n")
+            f.write("Source: WHO / CMS ICD-10-CM 2025\n")
+            f.write("Category: Medical\n")
+            f.write(f"Codes in chapter: {len(entries)}\n\n")
+            f.write("\n".join(entries))
+        count += 1
+
+    log.info(f"ICD-10: {count} chapter files saved ({sum(len(e) for e in chapters.values())} total codes)")
+    return count
+
+
+@dataset("cdc-diseases", "medical",
+         "CDC Disease A-Z — Fact sheets for major diseases and conditions")
+def fetch_cdc_diseases(output_dir: Path):
+    """Download CDC disease fact sheet index and summaries."""
+    ds_dir = output_dir / "cdc_diseases"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # CDC has a public API for some datasets, but health topics are best
+    # fetched from their A-Z index. We use their open data API.
+    # CDC WONDER API is complex; instead grab the diseases A-Z page content
+    index_url = "https://www.cdc.gov/az/sitemap.html"
+
+    log.info("Fetching CDC Disease A-Z index...")
+
+    try:
+        html = http_get(index_url, timeout=60)
+    except Exception as e:
+        log.error(f"Failed to fetch CDC A-Z index: {e}")
+        return 0
+
+    # Extract links to disease pages from the A-Z sitemap
+    # Pattern: <a href="/disease-name/index.html">Disease Name</a>
+    links = re.findall(
+        r'<a[^>]*href="(https://www\.cdc\.gov/[^"]+)"[^>]*>([^<]+)</a>',
+        html
+    )
+
+    # Filter to actual disease/condition topic pages
+    seen = set()
+    count = 0
+
+    for url, title in links:
+        title = title.strip()
+        # Skip navigation, non-topic links
+        if not title or len(title) < 3 or len(title) > 100:
+            continue
+        if any(skip in url.lower() for skip in [
+            "javascript", "#", ".pdf", ".zip", "media/", "images/",
+            "mmwr", "epi-info", "about", "contact", "careers",
+        ]):
+            continue
+        if title.lower() in seen:
+            continue
+        seen.add(title.lower())
+
+        # Fetch the topic page
+        try:
+            page_html = http_get(url, timeout=30)
+        except Exception:
+            continue
+
+        # Extract main content — look for article body or main content div
+        # Strip HTML to plain text
+        # Remove script/style blocks first
+        text = re.sub(r'<script[^>]*>.*?</script>', '', page_html, flags=re.DOTALL)
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
+        # Try to find main content area
+        main_match = re.search(r'<main[^>]*>(.*?)</main>', text, re.DOTALL)
+        if main_match:
+            text = main_match.group(1)
+        else:
+            body_match = re.search(r'<article[^>]*>(.*?)</article>', text, re.DOTALL)
+            if body_match:
+                text = body_match.group(1)
+
+        # Strip remaining HTML, keep text
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+
+        if len(text) < 200:
+            continue
+
+        # Truncate extremely long pages
+        if len(text) > 15000:
+            text = text[:15000] + "\n\n[Truncated — see CDC website for full content]"
+
+        safe_name = sanitize_filename(title) + ".txt"
+        filepath = ds_dir / safe_name
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# {title}\n\n")
+            f.write(f"Source: Centers for Disease Control and Prevention (CDC)\n")
+            f.write(f"Category: Medical / Public Health\n")
+            f.write(f"URL: {url}\n\n")
+            f.write(text)
+
+        count += 1
+        if count % 20 == 0:
+            log.info(f"  [{count}] {title}")
+        time.sleep(0.5)  # Rate limit
+
+        if count >= 300:  # Cap to avoid extremely long runs
+            break
+
+    log.info(f"CDC Diseases: {count} fact sheets saved")
+    return count
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LEGAL / COMPLIANCE DATASETS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataset("gdpr", "legal",
+         "GDPR Full Text — EU General Data Protection Regulation")
+def fetch_gdpr(output_dir: Path):
+    """Download GDPR articles and recitals from official EU source."""
+    ds_dir = output_dir / "gdpr"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # The official GDPR text is available from EUR-Lex
+    # We use the gdpr-info.eu structured version which is easier to parse
+    log.info("Fetching GDPR text...")
+
+    count = 0
+
+    # Fetch individual articles (1-99)
+    for art_num in range(1, 100):
+        url = f"https://gdpr-info.eu/art-{art_num}-gdpr/"
+        try:
+            html = http_get(url, timeout=30)
+        except Exception:
+            continue
+
+        # Extract article title and content
+        title_match = re.search(r'<h1[^>]*>([^<]+)</h1>', html)
+        # Get the entry-content div
+        content_match = re.search(
+            r'<div class="entry-content">(.*?)</div>\s*</(?:article|div)',
+            html, re.DOTALL
+        )
+
+        if not content_match:
+            continue
+
+        title = title_match.group(1).strip() if title_match else f"Article {art_num}"
+        body = content_match.group(1)
+        # Strip HTML
+        body = re.sub(r'<[^>]+>', ' ', body)
+        body = re.sub(r'\s+', ' ', body).strip()
+
+        if len(body) < 50:
+            continue
+
+        safe_name = sanitize_filename(f"GDPR_Art_{art_num:02d}") + ".txt"
+        filepath = ds_dir / safe_name
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# GDPR {title}\n\n")
+            f.write("Source: EU General Data Protection Regulation (2016/679)\n")
+            f.write("Category: Legal / Privacy\n\n")
+            f.write(body)
+
+        count += 1
+        time.sleep(0.3)
+
+    # Fetch recitals (1-173)
+    for rec_num in range(1, 174):
+        url = f"https://gdpr-info.eu/recitals/no-{rec_num}/"
+        try:
+            html = http_get(url, timeout=30)
+        except Exception:
+            continue
+
+        content_match = re.search(
+            r'<div class="entry-content">(.*?)</div>\s*</(?:article|div)',
+            html, re.DOTALL
+        )
+        if not content_match:
+            continue
+
+        body = re.sub(r'<[^>]+>', ' ', content_match.group(1))
+        body = re.sub(r'\s+', ' ', body).strip()
+
+        if len(body) < 30:
+            continue
+
+        safe_name = sanitize_filename(f"GDPR_Recital_{rec_num:03d}") + ".txt"
+        filepath = ds_dir / safe_name
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# GDPR Recital {rec_num}\n\n")
+            f.write("Source: EU General Data Protection Regulation (2016/679)\n")
+            f.write("Category: Legal / Privacy\n\n")
+            f.write(body)
+
+        count += 1
+        time.sleep(0.3)
+
+    log.info(f"GDPR: {count} articles and recitals saved")
+    return count
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCIENCE / ENGINEERING DATASETS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataset("nist-fips", "science",
+         "NIST FIPS Publications — Federal cryptographic and security standards")
+def fetch_nist_fips(output_dir: Path):
+    """Fetch NIST FIPS publication metadata and abstracts from CSRC."""
+    ds_dir = output_dir / "nist_fips"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # NIST CSRC has a public API for publications
+    url = "https://csrc.nist.gov/CSRC/media/feeds/framework/documents/fips-final-pubs.json"
+    log.info("Fetching NIST FIPS publications...")
+
+    # Use the NVD/CSRC API for FIPS pubs
+    api_url = "https://csrc.nist.gov/extensions/nudp/services/json/get-publications?series=fips&status=Final"
+
+    try:
+        data = http_get_json(api_url, timeout=60)
+    except Exception:
+        # Fallback: try a known list of important FIPS docs
+        log.warning("NIST FIPS API unavailable, using known publications list")
+        return _fetch_nist_fips_fallback(ds_dir)
+
+    pubs = data if isinstance(data, list) else data.get("publications", data.get("results", []))
+    if not isinstance(pubs, list):
+        log.warning("Unexpected NIST API response, using fallback")
+        return _fetch_nist_fips_fallback(ds_dir)
+
+    count = 0
+    for pub in pubs:
+        title = pub.get("title", "")
+        abstract = pub.get("abstract", pub.get("summary", ""))
+        pub_num = pub.get("docidentifier", pub.get("number", "unknown"))
+        pub_date = pub.get("published", pub.get("date", "N/A"))
+
+        if not abstract or len(abstract) < 50:
+            continue
+
+        safe_name = sanitize_filename(f"FIPS_{pub_num}") + ".txt"
+        filepath = ds_dir / safe_name
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# NIST FIPS {pub_num}: {title}\n\n")
+            f.write("Source: NIST Computer Security Resource Center\n")
+            f.write(f"Category: Cryptographic Standards\n")
+            f.write(f"Published: {pub_date}\n\n")
+            f.write(abstract)
+
+        count += 1
+
+    log.info(f"NIST FIPS: {count} publications saved")
+    return count
+
+
+def _fetch_nist_fips_fallback(ds_dir: Path):
+    """Fallback: save metadata for key FIPS publications."""
+    key_fips = [
+        ("140-3", "Security Requirements for Cryptographic Modules",
+         "Specifies the security requirements for cryptographic modules utilized within a security system protecting sensitive information in computer and telecommunication systems."),
+        ("180-4", "Secure Hash Standard (SHS)",
+         "Specifies five secure hash algorithms: SHA-1, SHA-224, SHA-256, SHA-384, and SHA-512 for computing a condensed representation of electronic data."),
+        ("186-5", "Digital Signature Standard (DSS)",
+         "Specifies algorithms for digital signature generation and verification: RSA, ECDSA, and EdDSA."),
+        ("197", "Advanced Encryption Standard (AES)",
+         "Specifies the Rijndael algorithm, a symmetric block cipher that can process data blocks of 128 bits using cipher keys of 128, 192, and 256 bits."),
+        ("198-1", "The Keyed-Hash Message Authentication Code (HMAC)",
+         "Provides a mechanism for message authentication using cryptographic hash functions. HMAC can be used with any approved cryptographic hash function."),
+        ("199", "Standards for Security Categorization of Federal Information and Information Systems",
+         "Provides standards for categorizing information and information systems according to an agency's level of concern for confidentiality, integrity, and availability."),
+        ("200", "Minimum Security Requirements for Federal Information and Information Systems",
+         "Specifies minimum security requirements for federal information and information systems in seventeen security-related areas."),
+        ("201-3", "Personal Identity Verification (PIV) of Federal Employees and Contractors",
+         "Establishes a standard for a PIV system that meets the control and security objectives of HSPD-12."),
+        ("202", "SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions",
+         "Specifies the SHA-3 family of functions on binary data, based on KECCAK."),
+    ]
+
+    count = 0
+    for num, title, abstract in key_fips:
+        safe_name = sanitize_filename(f"FIPS_{num}") + ".txt"
+        filepath = ds_dir / safe_name
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# NIST FIPS {num}: {title}\n\n")
+            f.write("Source: NIST Computer Security Resource Center\n")
+            f.write("Category: Cryptographic Standards\n\n")
+            f.write(abstract)
+        count += 1
+
+    return count
+
+
+@dataset("arxiv-ml", "science",
+         "arXiv ML/AI Abstracts — Recent machine learning research papers")
+def fetch_arxiv_ml(output_dir: Path):
+    """Fetch recent ML/AI paper abstracts from arXiv API."""
+    ds_dir = output_dir / "arxiv_ml_ai"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # arXiv API: search for recent ML, AI, and LLM papers
+    categories = [
+        ("cat:cs.LG", "Machine Learning"),
+        ("cat:cs.AI", "Artificial Intelligence"),
+        ("cat:cs.CL", "Computation and Language (NLP)"),
+    ]
+
+    count = 0
+    for search_query, cat_label in categories:
+        # Fetch 200 most recent per category
+        url = (
+            f"http://export.arxiv.org/api/query?"
+            f"search_query={urllib.parse.quote(search_query)}"
+            f"&start=0&max_results=200"
+            f"&sortBy=submittedDate&sortOrder=descending"
+        )
+
+        log.info(f"Fetching arXiv {cat_label} papers...")
+
+        try:
+            xml = http_get(url, timeout=120)
+        except Exception as e:
+            log.warning(f"  arXiv: failed to fetch {cat_label}: {e}")
+            continue
+
+        # Parse Atom XML entries
+        entries = re.findall(r'<entry>(.*?)</entry>', xml, re.DOTALL)
+
+        for entry in entries:
+            title_match = re.search(r'<title>([^<]+)</title>', entry)
+            summary_match = re.search(r'<summary>([^<]+)</summary>', entry)
+            id_match = re.search(r'<id>([^<]+)</id>', entry)
+            published_match = re.search(r'<published>([^<]+)</published>', entry)
+            authors = re.findall(r'<name>([^<]+)</name>', entry)
+
+            if not title_match or not summary_match:
+                continue
+
+            title = title_match.group(1).strip().replace('\n', ' ')
+            summary = summary_match.group(1).strip().replace('\n', ' ')
+            arxiv_id = id_match.group(1).strip() if id_match else "N/A"
+            published = published_match.group(1).strip()[:10] if published_match else "N/A"
+
+            if len(summary) < 100:
+                continue
+
+            # Use arxiv ID for unique filename
+            paper_id = arxiv_id.split('/')[-1] if '/' in arxiv_id else arxiv_id.split('abs/')[-1]
+            safe_name = sanitize_filename(f"arxiv_{paper_id}") + ".txt"
+            filepath = ds_dir / safe_name
+
+            if filepath.exists():
+                count += 1
+                continue
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(f"# {title}\n\n")
+                f.write(f"Source: arXiv ({cat_label})\n")
+                f.write(f"Category: Science / AI Research\n")
+                f.write(f"arXiv ID: {arxiv_id}\n")
+                f.write(f"Published: {published}\n")
+                if authors:
+                    f.write(f"Authors: {', '.join(authors[:5])}")
+                    if len(authors) > 5:
+                        f.write(f" et al. ({len(authors)} total)")
+                    f.write("\n")
+                f.write(f"\n## Abstract\n\n{summary}\n")
+
+            count += 1
+
+        time.sleep(3)  # arXiv rate limit: max 1 request per 3 seconds
+
+    log.info(f"arXiv ML/AI: {count} papers saved")
+    return count
+
+
+@dataset("nasa-reports", "science",
+         "NASA Technical Reports — Public domain aerospace research")
+def fetch_nasa_reports(output_dir: Path):
+    """Fetch NASA technical report metadata from NTRS API."""
+    ds_dir = output_dir / "nasa_reports"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # NASA Technical Reports Server (NTRS) API
+    base_url = "https://ntrs.nasa.gov/api/citations"
+
+    # Search for recent, public-domain technical reports
+    search_topics = [
+        "machine learning",
+        "space weather",
+        "cybersecurity",
+        "systems engineering",
+        "data science",
+    ]
+
+    count = 0
+    seen_ids = set()
+
+    for topic in search_topics:
+        url = f"{base_url}/search?q={urllib.parse.quote(topic)}&page.size=100&page.from=0"
+        log.info(f"Fetching NASA reports: {topic}...")
+
+        try:
+            data = http_get_json(url, timeout=60)
+        except Exception as e:
+            log.warning(f"  NASA: failed to search '{topic}': {e}")
+            continue
+
+        results = data.get("results", [])
+        for item in results:
+            doc_id = item.get("id", "")
+            if doc_id in seen_ids:
+                continue
+            seen_ids.add(doc_id)
+
+            title = item.get("title", "")
+            abstract = item.get("abstract", "")
+            if not abstract or len(abstract) < 100:
+                continue
+
+            center = item.get("center", {}).get("name", "NASA")
+            pub_date = item.get("publicationDate", "N/A")
+            report_num = item.get("reportNumber", "N/A")
+            authors = [a.get("name", "") for a in item.get("authorAffiliations", [])]
+
+            safe_name = sanitize_filename(f"NASA_{doc_id}") + ".txt"
+            filepath = ds_dir / safe_name
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(f"# {title}\n\n")
+                f.write(f"Source: NASA Technical Reports Server (NTRS)\n")
+                f.write(f"Category: Science / Aerospace\n")
+                f.write(f"Report Number: {report_num}\n")
+                f.write(f"Center: {center}\n")
+                f.write(f"Published: {pub_date}\n")
+                if authors:
+                    f.write(f"Authors: {', '.join(authors[:5])}\n")
+                f.write(f"\n## Abstract\n\n{abstract}\n")
+
+            count += 1
+
+        time.sleep(1)
+
+    log.info(f"NASA Reports: {count} reports saved")
+    return count
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HOMELAB / SELF-HOSTED DATASETS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataset("proxmox-docs", "homelab",
+         "Proxmox VE Documentation — Virtual machines, containers, storage")
+def fetch_proxmox_docs(output_dir: Path):
+    """Fetch Proxmox VE documentation from their wiki."""
+    ds_dir = output_dir / "proxmox_docs"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # Key Proxmox wiki pages (manually curated — wiki has no clean API)
+    key_pages = [
+        "Main_Page", "Installation", "Getting_Started",
+        "Qemu/KVM_Virtual_Machines", "Linux_Container",
+        "Proxmox_Cluster_File_System_(pmxcfs)",
+        "Cluster_Manager", "Storage", "ZFS_on_Linux",
+        "Ceph_Server", "Network_Configuration",
+        "Firewall", "High_Availability",
+        "Backup_and_Restore", "User_Management",
+        "API", "Cloud-Init_Support",
+        "USB_Devices_in_Virtual_Machines",
+        "PCI(e)_Passthrough", "SPICE",
+        "Migrate_to_Proxmox_VE",
+        "Package_Repositories",
+        "Certificate_Management",
+        "Notifications", "Metric_Server",
+        "Resource_Mapping", "SDN",
+    ]
+
+    count = 0
+    base_url = "https://pve.proxmox.com/wiki"
+
+    log.info(f"Fetching {len(key_pages)} Proxmox wiki pages...")
+
+    for page_name in key_pages:
+        url = f"{base_url}/{page_name}"
+        try:
+            html = http_get(url, timeout=30)
+        except Exception as e:
+            log.warning(f"  Proxmox: failed {page_name}: {e}")
+            continue
+
+        # Extract main content
+        content_match = re.search(
+            r'<div id="mw-content-text"[^>]*>(.*?)</div>\s*(?:<div|<!--)',
+            html, re.DOTALL
+        )
+        if not content_match:
+            # Try broader match
+            content_match = re.search(
+                r'<div class="mw-parser-output">(.*?)</div>\s*(?:<div id="catlinks|<!--)',
+                html, re.DOTALL
+            )
+
+        if not content_match:
+            continue
+
+        text = content_match.group(1)
+        # Clean HTML
+        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+
+        if len(text) < 200:
+            continue
+
+        if len(text) > 20000:
+            text = text[:20000] + "\n\n[Truncated — see Proxmox wiki for full content]"
+
+        safe_name = sanitize_filename(f"PVE_{page_name}") + ".txt"
+        filepath = ds_dir / safe_name
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# Proxmox VE: {page_name.replace('_', ' ')}\n\n")
+            f.write("Source: Proxmox VE Wiki\n")
+            f.write("Category: Homelab / Virtualization\n")
+            f.write(f"URL: {url}\n\n")
+            f.write(text)
+
+        count += 1
+        time.sleep(0.5)
+
+    log.info(f"Proxmox docs: {count} pages saved")
+    return count
+
+
+@dataset("pfsense-docs", "homelab",
+         "pfSense/Netgate Documentation — Firewall, routing, VPN")
+def fetch_pfsense_docs(output_dir: Path):
+    """Fetch pfSense documentation from Netgate docs GitHub repo."""
+    ds_dir = output_dir / "pfsense_docs"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    # Netgate docs are on GitHub
+    base_url = "https://api.github.com/repos/pfsense/docs/contents/source"
+    key_dirs = [
+        "firewall", "vpn", "routing", "nat", "interfaces",
+        "dns", "dhcp", "certificates", "monitoring",
+        "highavailability", "packages", "install",
+        "usermanager", "backup", "config",
+        "troubleshooting", "hardware",
+    ]
+
+    count = 0
+    log.info("Fetching pfSense documentation...")
+
+    for dir_name in key_dirs:
+        url = f"{base_url}/{dir_name}"
+        try:
+            items = http_get_json(url)
+        except Exception as e:
+            log.warning(f"  pfSense: couldn't list {dir_name}: {e}")
+            continue
+
+        if not isinstance(items, list):
+            continue
+
+        rst_files = [f for f in items
+                     if isinstance(f, dict) and f.get("name", "").endswith((".rst", ".md"))]
+
+        for item in rst_files:
+            name = item.get("name", "")
+            safe_name = sanitize_filename(f"pfsense_{dir_name}_{name}".replace(".rst", "").replace(".md", "")) + ".txt"
+            filepath = ds_dir / safe_name
+
+            if filepath.exists() and filepath.stat().st_size > 100:
+                count += 1
+                continue
+
+            try:
+                content = http_get(item["download_url"])
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(f"# pfSense: {name.replace('.rst', '').replace('.md', '').replace('-', ' ').title()}\n\n")
+                    f.write(f"Source: pfSense/Netgate Documentation\n")
+                    f.write(f"Section: {dir_name}\nCategory: Homelab / Networking\n\n")
+                    f.write(content)
+                count += 1
+                time.sleep(0.3)
+            except Exception as e:
+                log.warning(f"  pfSense: failed {name}: {e}")
+
+        time.sleep(1)
+
+    log.info(f"pfSense docs: {count} pages saved")
+    return count
+
+
+@dataset("grafana-docs", "homelab",
+         "Grafana Documentation — Dashboards, alerting, data sources")
+def fetch_grafana_docs(output_dir: Path):
+    """Fetch Grafana documentation from GitHub repo."""
+    ds_dir = output_dir / "grafana_docs"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+
+    base_url = "https://api.github.com/repos/grafana/grafana/contents/docs/sources"
+    key_dirs = [
+        "alerting", "dashboards", "datasources",
+        "panels-visualizations", "explore",
+        "administration", "setup-grafana",
+    ]
+
+    count = 0
+    log.info("Fetching Grafana documentation...")
+
+    for dir_name in key_dirs:
+        url = f"{base_url}/{dir_name}"
+        try:
+            items = http_get_json(url)
+        except Exception as e:
+            log.warning(f"  Grafana: couldn't list {dir_name}: {e}")
+            continue
+
+        if not isinstance(items, list):
+            continue
+
+        md_files = [f for f in items
+                    if isinstance(f, dict) and f.get("name", "").endswith((".md", ".mdx"))]
+
+        for item in md_files:
+            name = item.get("name", "")
+            safe_name = sanitize_filename(f"grafana_{dir_name}_{name}".replace(".md", "").replace(".mdx", "")) + ".txt"
+            filepath = ds_dir / safe_name
+
+            if filepath.exists() and filepath.stat().st_size > 100:
+                count += 1
+                continue
+
+            try:
+                content = http_get(item["download_url"])
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(f"# Grafana: {name.replace('.md', '').replace('.mdx', '').replace('-', ' ').title()}\n\n")
+                    f.write(f"Source: Grafana Documentation\n")
+                    f.write(f"Section: {dir_name}\nCategory: Homelab / Monitoring\n\n")
+                    f.write(content)
+                count += 1
+                time.sleep(0.3)
+            except Exception as e:
+                log.warning(f"  Grafana: failed {name}: {e}")
+
+        # Also check one level of subdirectories
+        sub_dirs = [f for f in items if isinstance(f, dict) and f.get("type") == "dir"]
+        for sub in sub_dirs[:5]:  # Limit depth
+            try:
+                sub_items = http_get_json(sub["url"])
+                sub_md = [f for f in sub_items
+                          if isinstance(f, dict) and f.get("name", "").endswith((".md", ".mdx"))]
+                for item in sub_md:
+                    name = item.get("name", "")
+                    sub_name = sub.get("name", "")
+                    safe_name = sanitize_filename(
+                        f"grafana_{dir_name}_{sub_name}_{name}"
+                        .replace(".md", "").replace(".mdx", "")
+                    ) + ".txt"
+                    filepath = ds_dir / safe_name
+
+                    if filepath.exists() and filepath.stat().st_size > 100:
+                        count += 1
+                        continue
+
+                    try:
+                        content = http_get(item["download_url"])
+                        with open(filepath, "w", encoding="utf-8") as f:
+                            f.write(f"# Grafana: {name.replace('.md', '').replace('.mdx', '').replace('-', ' ').title()}\n\n")
+                            f.write(f"Source: Grafana Documentation\n")
+                            f.write(f"Section: {dir_name}/{sub_name}\nCategory: Homelab / Monitoring\n\n")
+                            f.write(content)
+                        count += 1
+                        time.sleep(0.3)
+                    except Exception:
+                        pass
+                time.sleep(1)
+            except Exception:
+                pass
+
+        time.sleep(1)
+
+    log.info(f"Grafana docs: {count} pages saved")
+    return count
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # THREAT INTEL DATASETS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1553,7 +2505,7 @@ def list_datasets():
             categories[cat] = []
         categories[cat].append((name, info["description"]))
 
-    for cat in ["high-value", "day-to-day", "threat-intel", "custom"]:
+    for cat in ["high-value", "medical", "day-to-day", "legal", "science", "homelab", "threat-intel", "custom"]:
         if cat not in categories:
             continue
         print(f"\n  [{cat.upper()}]")
@@ -1562,7 +2514,7 @@ def list_datasets():
 
     # Show any other categories from custom sources
     for cat in sorted(categories.keys()):
-        if cat in ("high-value", "day-to-day", "threat-intel", "custom"):
+        if cat in ("high-value", "medical", "day-to-day", "legal", "science", "homelab", "threat-intel", "custom"):
             continue
         print(f"\n  [{cat.upper()}]")
         for name, desc in categories[cat]:
@@ -1587,7 +2539,7 @@ Examples:
   python3 fetch-rag-datasets.py --category high-value
 
   # Fetch everything and upload to Open WebUI
-  python3 fetch-rag-datasets.py --datasets all --upload --api-key sk-xxx
+  python3 fetch-rag-datasets.py --datasets all --fetch --upload --api-key sk-xxx
 
   # Generate a custom sources template
   python3 fetch-rag-datasets.py --generate-sources my-sources.json
@@ -1600,6 +2552,8 @@ Examples:
         """,
     )
     parser.add_argument("--list", action="store_true", help="List available datasets")
+    parser.add_argument("--fetch", action="store_true", default=True,
+                        help="Fetch datasets (default, kept for explicitness)")
     parser.add_argument("--datasets", nargs="+", help="Datasets to fetch (or 'all')")
     parser.add_argument("--category", help="Fetch all datasets in a category")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR,
