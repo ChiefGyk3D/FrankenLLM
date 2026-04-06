@@ -1408,6 +1408,9 @@ def upload_datasets(output_dir: Path, webui_url: str, api_key: str):
     dataset_dirs = sorted([d for d in output_dir.iterdir()
                            if d.is_dir() and not d.name.startswith(".")])
 
+    total_uploaded = 0
+    total_failed = 0
+
     for ds_dir in dataset_dirs:
         files = sorted(ds_dir.glob("*.txt"))
         if not files:
@@ -1424,18 +1427,45 @@ def upload_datasets(output_dir: Path, webui_url: str, api_key: str):
             continue
 
         log.info(f"Uploading {len(files)} files to '{collection_name}'...")
+        ds_uploaded = 0
+        ds_failed = 0
 
         for i, filepath in enumerate(files):
-            file_id = _upload_file(base_url, api_key, filepath)
-            if file_id:
-                _wait_processing(base_url, api_key, file_id)
-                _add_to_knowledge(base_url, api_key, kid, file_id)
+            # Retry loop (3 attempts)
+            ok = False
+            for attempt in range(3):
+                if attempt > 0:
+                    time.sleep(4 * attempt)
+
+                file_id = _upload_file(base_url, api_key, filepath)
+                if not file_id:
+                    continue
+
+                # Wait for server to extract content before adding to knowledge
+                processed = _wait_processing(base_url, api_key, file_id)
+                if not processed:
+                    log.warning(f"  Processing incomplete for {filepath.name}, retrying")
+                    continue
+
+                if _add_to_knowledge(base_url, api_key, kid, file_id):
+                    ok = True
+                    break
+
+            if ok:
+                ds_uploaded += 1
+            else:
+                ds_failed += 1
+                log.warning(f"  Failed after retries: {filepath.name}")
 
             if (i + 1) % 25 == 0:
-                log.info(f"  [{i+1}/{len(files)}] uploaded")
+                log.info(f"  [{i+1}/{len(files)}] {filepath.name}")
             time.sleep(0.3)
 
-        log.info(f"  Done: {len(files)} files → '{collection_name}'")
+        total_uploaded += ds_uploaded
+        total_failed += ds_failed
+        log.info(f"  Done: {ds_uploaded}/{len(files)} uploaded, {ds_failed} failed → '{collection_name}'")
+
+    log.info(f"Upload complete: {total_uploaded} files uploaded, {total_failed} failed across {len(dataset_dirs)} datasets")
 
 
 def _create_collection(base_url, api_key, name, description):
@@ -1504,7 +1534,7 @@ def _add_to_knowledge(base_url, api_key, knowledge_id, file_id):
     body = json.dumps({"file_id": file_id}).encode()
     try:
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             resp.read()
         return True
     except Exception:
