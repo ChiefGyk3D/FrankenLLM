@@ -60,10 +60,26 @@ FRANKEN_GPU1_NAME="RTX 3050"
 **This is the key to ensuring the correct model loads on each GPU!**
 
 ```bash
-# Specify which models to use on each GPU
-FRANKEN_GPU0_MODEL="gemma3:12b"
+# Specify which models to use on each GPU (gemma4 models require Ollama >= 0.33)
+FRANKEN_GPU0_MODEL="gemma4:12b"
 FRANKEN_GPU1_MODEL="gemma3:4b"
+
+# Guard/moderation model kept resident on GPU 0 alongside the main model
+# (e.g. for AI moderation bots; set empty to skip during warmup)
+FRANKEN_GPU0_GUARD_MODEL="llama-guard3:8b"
+
+# Per-instance context length, written to OLLAMA_CONTEXT_LENGTH in the
+# systemd units by scripts/install-ollama-native.sh
+FRANKEN_GPU0_CONTEXT=8192
+FRANKEN_GPU1_CONTEXT=32768
 ```
+
+**Dual-resident VRAM budget (16GB GPU):** Ollama >= 0.33 defaults to a 32768
+context, and the KV cache scales with it (~130MB per 1K tokens for an 8B
+model). Measured on an RTX 5060 Ti 16GB: `gemma4:12b` + `llama-guard3:8b`
+both stay resident at 8192 context (~14.2GB); at 16384 the guard evicts the
+main model. If you change models, re-check with `ollama ps` that both show
+`100% GPU` after warmup.
 
 **How Model Configuration Works:**
 
@@ -75,7 +91,7 @@ FRANKEN_GPU1_MODEL="gemma3:4b"
 
 2. **Add Models to Specific GPUs**:
    ```bash
-   ./bin/add-model.sh 0 gemma3:12b   # Add to GPU 0
+   ./bin/add-model.sh 0 gemma4:12b   # Add to GPU 0
    ./bin/add-model.sh 1 gemma3:4b    # Add to GPU 1
    ./bin/add-model.sh                 # Interactive mode
    ./bin/add-model.sh list            # List models per GPU
@@ -121,7 +137,7 @@ FRANKEN_GPU_COUNT=2
 # 16GB GPU
 FRANKEN_GPU0_NAME="RTX 5060 Ti"
 FRANKEN_GPU0_PORT=11434
-FRANKEN_GPU0_MODEL="gemma3:12b"
+FRANKEN_GPU0_MODEL="gemma4:12b"
 
 # 8GB GPU
 FRANKEN_GPU1_NAME="RTX 3050"
@@ -170,7 +186,7 @@ FRANKEN_GPU0_MODEL="gemma3:27b"
 
 FRANKEN_GPU1_PORT=11435
 FRANKEN_GPU1_NAME="RTX 4060 Ti"
-FRANKEN_GPU1_MODEL="gemma3:12b"
+FRANKEN_GPU1_MODEL="gemma4:12b"
 
 FRANKEN_GPU2_PORT=11436
 FRANKEN_GPU2_NAME="RTX 3060"
@@ -187,21 +203,23 @@ FRANKEN_GPU2_MODEL="gemma3:4b"
 - `deepseek-coder:33b-instruct` - Premium code generation
 
 ### 24GB VRAM
-- `gemma3:27b` ⭐ **Recommended** - Largest Gemma 3, perfect fit
+- `gemma4:26b` ⭐ **Recommended** - Gemma 4 MoE (26B, A4B active), requires Ollama >= 0.33
+- `gemma3:27b` - Largest Gemma 3, perfect fit
 - `llama3.1:45b-instruct-q4_0` - High capability quantized
 - `qwen2.5:14b` - Excellent multilingual
 - `deepseek-coder:33b-instruct-q4_0` - Professional coding
 - `mistral:22b` - Great all-rounder
 
 ### 16GB VRAM
-- `gemma3:12b` ⭐ **Recommended** - Perfect fit
+- `gemma4:12b` ⭐ **Recommended** - Perfect fit (requires Ollama >= 0.33); coexists with `llama-guard3:8b` at 8192 context
+- `gemma3:12b` - Previous generation, still excellent
 - `gemma2:9b` - Stable alternative
 - `codellama:13b` - For programming
 - `llama3.2` - General purpose
 - `mistral:7b-instruct` - Great for instructions
 
 ### 12GB VRAM
-- `gemma3:12b` - Fits with some room
+- `gemma4:12b` - Fits with some room
 - `mistral:7b-instruct` - Great performance
 - `llama3.2:7b` - Good all-rounder
 - `deepseek-coder:6.7b` - Coding specialist
@@ -229,7 +247,7 @@ FRANKEN_GPU2_MODEL="gemma3:4b"
 2. **Install**: `./install.sh`
    - Sets up Ollama services
 
-3. **Pull Models**: `./bin/pull-dual-models.sh gemma3:12b gemma3:4b`
+3. **Pull Models**: `./bin/pull-dual-models.sh gemma4:12b gemma3:4b`
    - Downloads the models you specified
 
 4. **Warm Up**: `./bin/warmup-models.sh`
@@ -270,7 +288,7 @@ FRANKEN_GPU2_MODEL="gemma3:4b"
 
 **Solution**:
 1. Check the model is installed: `curl http://SERVER:11434/api/tags`
-2. Pull the model if missing: `./bin/pull-model.sh gemma3:12b`
+2. Pull the model if missing: `./bin/pull-model.sh gemma4:12b`
 3. Check spelling matches Ollama's model name exactly
 
 ### Single GPU Not Working
@@ -330,6 +348,11 @@ FRANKEN_GPU1_PORT      # Port for GPU 1
 FRANKEN_GPU1_NAME      # Display name for GPU 1
 FRANKEN_GPU1_MODEL     # Model for GPU 1
 # etc...
+
+# Dual-resident and context settings
+FRANKEN_GPU0_GUARD_MODEL  # Guard/moderation model warmed alongside GPU 0's main model (empty = off)
+FRANKEN_GPU0_CONTEXT      # OLLAMA_CONTEXT_LENGTH for GPU 0's instance (default 8192)
+FRANKEN_GPU1_CONTEXT      # OLLAMA_CONTEXT_LENGTH for GPU 1's instance (default 32768)
 ```
 
 ## Best Practices
@@ -348,7 +371,7 @@ If you have an existing installation without model configuration:
 2. **Add model config**: Edit `.env` and add:
    ```bash
    FRANKEN_GPU_COUNT=2
-   FRANKEN_GPU0_MODEL="gemma3:12b"
+   FRANKEN_GPU0_MODEL="gemma4:12b"
    FRANKEN_GPU1_MODEL="gemma3:4b"
    ```
 3. **Warm up**: `./bin/warmup-models.sh`

@@ -60,10 +60,10 @@ This automatically:
 
 ```bash
 # For same model on all GPUs:
-./bin/pull-model.sh gemma3:12b
+./bin/pull-model.sh gemma4:12b
 
 # For different models per GPU:
-./bin/pull-dual-models.sh gemma3:12b gemma3:4b
+./bin/pull-dual-models.sh gemma4:12b gemma3:4b
 
 # The script adapts to your GPU count automatically!
 ```
@@ -116,7 +116,7 @@ Each GPU has its own isolated model storage. Add models to specific GPUs:
 
 ```bash
 # Add model to a specific GPU
-./bin/add-model.sh 0 gemma3:12b    # Add to GPU 0 (larger GPU)
+./bin/add-model.sh 0 gemma4:12b    # Add to GPU 0 (larger GPU)
 ./bin/add-model.sh 1 gemma3:4b     # Add to GPU 1 (smaller GPU)
 
 # Interactive mode
@@ -205,7 +205,7 @@ cd FrankenLLM
 ./install.sh
 
 # Pull models
-./bin/pull-dual-models.sh gemma3:12b gemma3:4b
+./bin/pull-dual-models.sh gemma4:12b gemma3:4b
 
 # Install web UI
 ./remote/install-webui.sh
@@ -229,7 +229,7 @@ cd FrankenLLM
 ./install.sh
 
 # Pull models
-./bin/pull-model.sh gemma3:12b
+./bin/pull-model.sh gemma4:12b
 
 # Install web UI
 ./bin/install-webui.sh
@@ -251,7 +251,7 @@ You have multiple GPUs with different VRAM sizes:
 ./install.sh
 
 # Pull different models based on VRAM
-./bin/pull-dual-models.sh llama3.1:70b-q4 gemma3:27b gemma3:12b
+./bin/pull-dual-models.sh llama3.1:70b-q4 gemma3:27b gemma4:12b
 # Script automatically handles N GPUs!
 ```
 

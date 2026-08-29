@@ -68,7 +68,7 @@ for i in $(seq 0 $(($GPU_COUNT - 1))); do
     
     if [ $i -eq 0 ]; then
         default_name="RTX 5060 Ti"
-        default_model="gemma3:12b"
+        default_model="gemma4:12b"
     elif [ $i -eq 1 ]; then
         default_name="RTX 3050"
         default_model="gemma3:4b"
@@ -105,7 +105,7 @@ echo "   Leave blank to use defaults"
 echo ""
 for i in $(seq 0 $(($GPU_COUNT - 1))); do
     if [ $i -eq 0 ]; then
-        default_model="gemma3:12b"
+        default_model="gemma4:12b"
     else
         default_model="gemma3:4b"
     fi

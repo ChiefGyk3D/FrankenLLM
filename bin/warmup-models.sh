@@ -12,15 +12,20 @@ echo ""
 
 # Model to use on each GPU
 # Priority: 1) Command line args, 2) Config file, 3) Default
-GPU0_MODEL="${1:-${FRANKEN_GPU0_MODEL:-gemma3:12b}}"
+GPU0_MODEL="${1:-${FRANKEN_GPU0_MODEL:-gemma4:12b}}"
 GPU1_MODEL="${2:-${FRANKEN_GPU1_MODEL:-gemma3:4b}}"
+GPU0_GUARD_MODEL="${FRANKEN_GPU0_GUARD_MODEL:-}"
+
+# First load after an Ollama upgrade can take over a minute (runner init),
+# so the timeout must be generous
+WARMUP_TIMEOUT=180
 
 echo "Loading models into GPU memory..."
 echo ""
 
 # Warm up GPU 0 by making a small request
 echo "GPU 0 ($FRANKEN_GPU0_NAME) - Loading $GPU0_MODEL..."
-RESPONSE_0=$(curl -s -m 30 "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT/api/generate" -d "{
+RESPONSE_0=$(curl -s -m $WARMUP_TIMEOUT "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT/api/generate" -d "{
   \"model\": \"$GPU0_MODEL\",
   \"prompt\": \"Hi\",
   \"stream\": false
@@ -34,6 +39,25 @@ else
 fi
 
 echo ""
+
+# Warm up the guard/moderation model on GPU 0 so it's resident alongside
+# the main model (e.g. llama-guard3:8b for AI moderation)
+if [ -n "$GPU0_GUARD_MODEL" ]; then
+    echo "GPU 0 ($FRANKEN_GPU0_NAME) - Loading guard model $GPU0_GUARD_MODEL..."
+    RESPONSE_G=$(curl -s -m $WARMUP_TIMEOUT "http://$FRANKEN_SERVER_IP:$FRANKEN_GPU0_PORT/api/generate" -d "{
+      \"model\": \"$GPU0_GUARD_MODEL\",
+      \"prompt\": \"Hi\",
+      \"stream\": false
+    }" 2>&1)
+
+    if echo "$RESPONSE_G" | grep -q "response"; then
+        echo "  ✅ $GPU0_GUARD_MODEL loaded and ready on GPU 0"
+    else
+        echo "  ❌ Failed to load $GPU0_GUARD_MODEL on GPU 0"
+        echo "  Error: $RESPONSE_G"
+    fi
+    echo ""
+fi
 
 # Warm up GPU 1 if configured
 if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then

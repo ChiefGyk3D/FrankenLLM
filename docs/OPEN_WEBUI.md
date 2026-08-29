@@ -34,7 +34,7 @@ This will:
 
 **Automatic Configuration (v2.0+)**: Open WebUI is now automatically configured to connect to all your GPUs. Each GPU has isolated model storage, so:
 
-- Models on GPU 0 appear as: `gemma3:12b`, etc.
+- Models on GPU 0 appear as: `gemma4:12b`, etc.
 - Models on GPU 1 appear as: `gemma3:4b`, etc.
 
 When you select a model in Open WebUI, it automatically uses the correct GPU based on which instance has that model.
@@ -52,7 +52,7 @@ Use the model management tool to add models to specific GPUs:
 
 ```bash
 # Add models to specific GPUs
-./bin/add-model.sh 0 gemma3:12b   # GPU 0 (larger GPU)
+./bin/add-model.sh 0 gemma4:12b   # GPU 0 (larger GPU)
 ./bin/add-model.sh 1 gemma3:4b    # GPU 1 (smaller GPU)
 
 # List models per GPU
@@ -120,7 +120,7 @@ Open WebUI provides an OpenAI-compatible API that works with N8n and other tools
 
 # Or direct API calls
 curl http://YOUR_IP:11434/api/generate -d '{
-  "model": "gemma3:12b",
+  "model": "gemma4:12b",
   "prompt": "Hello"
 }'
 ```
@@ -145,7 +145,7 @@ Users can select which model (and thus which GPU) to use:
 └──────┬──────┘
        │
        ├─────────> Ollama GPU 0 :11434 (Primary)
-       │           └─> RTX 5060 Ti (gemma3:12b)
+       │           └─> RTX 5060 Ti (gemma4:12b)
        │
        └─────────> Ollama GPU 1 :11435 (Secondary)
                    └─> RTX 3050 (gemma3:4b)
@@ -250,7 +250,7 @@ The key advantage of FrankenLLM for RAG is GPU isolation:
       │                                                    │
       │◄──────────────────────── Top K chunks ◄────────────┘
       │
-      └──► GPU 0 (RTX 5060 Ti) ──► gemma3:12b ──► Generate answer with chunks
+      └──► GPU 0 (RTX 5060 Ti) ──► gemma4:12b ──► Generate answer with chunks
 ```
 
 - **GPU 0** stays free for chat generation — no VRAM competition

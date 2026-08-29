@@ -22,21 +22,21 @@ if [ $ACTUAL_ARGS -ne $EXPECTED_ARGS ]; then
     case $FRANKEN_GPU_COUNT in
         1)
             echo "Examples:"
-            echo "  $0 gemma3:12b"
+            echo "  $0 gemma4:12b"
             echo "  $0 gemma2:9b"
             echo "  $0 llama3.2"
             ;;
         2)
             echo "Examples:"
-            echo "  $0 gemma3:12b gemma3:4b        # Google Gemma 3 - PERFECT FIT!"
-            echo "  $0 gemma3:12b gemma3:1b        # Google Gemma 3 - Fast combo"
+            echo "  $0 gemma4:12b gemma3:4b        # Gemma 4 + Gemma 3 - PERFECT FIT!"
+            echo "  $0 gemma4:12b gemma3:1b        # Gemma 4 + Gemma 3 - Fast combo"
             echo "  $0 gemma2:9b gemma2:2b         # Google Gemma 2 family"
             echo "  $0 llama3.2 llama3.2:3b        # Meta Llama family"
             echo "  $0 mistral:7b phi3:3.8b        # Mixed models"
             ;;
         3)
             echo "Examples:"
-            echo "  $0 gemma3:12b gemma3:4b gemma3:1b"
+            echo "  $0 gemma4:12b gemma3:4b gemma3:1b"
             echo "  $0 gemma2:9b gemma2:2b llama3.2:3b"
             ;;
         *)
@@ -59,7 +59,7 @@ if [ $ACTUAL_ARGS -ne $EXPECTED_ARGS ]; then
     echo "Model Recommendations by VRAM:"
     echo "  32GB+ GPUs: gemma3:27b, llama3.1:70b-instruct-q4_0, qwen2.5:32b, mixtral:8x7b"
     echo "  24GB GPUs:  gemma3:27b, llama3.1:45b-instruct-q4_0, qwen2.5:14b, deepseek-coder:33b-instruct-q4_0"
-    echo "  16GB GPUs:  gemma3:12b, gemma2:9b, llama3.2, mistral:7b-instruct, codellama:13b"
+    echo "  16GB GPUs:  gemma4:12b, gemma2:9b, llama3.2, mistral:7b-instruct, codellama:13b"
     echo "  8GB GPUs:   gemma3:4b, gemma3:1b, gemma2:2b, llama3.2:3b, phi3:3.8b"
     exit 1
 fi

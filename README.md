@@ -199,7 +199,7 @@ Auto-detects local or remote from your configuration and:
 
 ```bash
 # Pull different models optimized for each GPU
-./bin/pull-dual-models.sh gemma3:12b gemma3:4b
+./bin/pull-dual-models.sh gemma4:12b gemma3:4b
 
 # Or pull the same model on both
 ./bin/pull-model.sh gemma2:9b
@@ -228,7 +228,8 @@ Auto-detects local or remote from your configuration and:
 ### For 32GB+ GPU (e.g., RTX 4090, RTX 6000 Ada, A6000)
 
 **Flagship Models:**
-- `gemma3:27b` - ⭐ **Google's largest Gemma!** Multimodal, 128K context
+- `gemma4:31b` - ⭐ **Google's largest open Gemma!** Multimodal, 256K context (requires Ollama >= 0.33)
+- `gemma3:27b` - Google's largest Gemma 3, multimodal, 128K context
 - `llama3.1:70b-instruct-q4_0` - Meta's most capable (quantized to fit)
 - `qwen2.5:32b` - Alibaba's powerful multilingual model
 - `mixtral:8x7b` - Mixture of experts, excellent performance
@@ -240,7 +241,8 @@ Auto-detects local or remote from your configuration and:
 ### For 24GB GPU (e.g., RTX 4090, RTX 3090, A5000)
 
 **Premium Models:**
-- `gemma3:27b` - ⭐ **FITS PERFECTLY!** Google's flagship multimodal
+- `gemma4:26b` - ⭐ **Newest!** Gemma 4 MoE (26B, A4B active) - 19GB, requires Ollama >= 0.33
+- `gemma3:27b` - **FITS PERFECTLY!** Google's flagship Gemma 3 multimodal
 - `llama3.1:45b-instruct-q4_0` - High capability (quantized)
 - `qwen2.5:14b` - Excellent reasoning and multilingual
 - `deepseek-coder:33b-instruct-q4_0` - Professional code generation
@@ -251,10 +253,13 @@ Auto-detects local or remote from your configuration and:
 
 ### For 16GB GPU (e.g., RTX 5060 Ti, RTX 4060 Ti)
 
-**Google Gemma 3 (Newest! March 2025):**
-- `gemma3:12b` - ⭐ **PERFECT FIT!** Multimodal (text + images), 128K context
+**Google Gemma 4 (Newest! 2026) — requires Ollama >= 0.33:**
+- `gemma4:12b` - ⭐ **PERFECT FIT!** Multimodal (text + images), 256K context, smaller than gemma3:12b
+- `gemma3:12b` - Previous generation, still excellent, 128K context
 - `gemma2:9b` - Stable, excellent performance
-- `gemma:7b` - Original Gemma
+
+**Pairs with a resident guard model (AI moderation):**
+- `gemma4:12b` + `llama-guard3:8b` both stay resident on 16GB at 8192 context (~14GB)
 
 **Other Great Options:**
 - `llama3.2` - Meta's latest
@@ -264,8 +269,8 @@ Auto-detects local or remote from your configuration and:
 
 ### For 8GB GPU (e.g., RTX 3050, RTX 4060)
 
-**Google Gemma 3 (Newest! March 2025):**
-- `gemma3:4b` - ⭐ **PERFECT FIT!** Multimodal, great capability/memory balance
+**Google Gemma 3:**
+- `gemma3:4b` - ⭐ **PERFECT FIT!** Multimodal, great capability/memory balance (gemma4:e2b is a 7.2GB download - too tight on 8GB)
 - `gemma3:1b` - Ultra-fast responses
 - `gemma2:2b` - Stable, best quality for 8GB
 - `gemma:2b` - Original, still excellent
@@ -287,14 +292,14 @@ Auto-detects local or remote from your configuration and:
 ./bin/pull-dual-models.sh gemma3:27b qwen2.5:14b
 ```
 
-**All Gemma 3 (16GB + 8GB):**
+**Gemma 4 + Gemma 3 (16GB + 8GB):**
 ```bash
-./bin/pull-dual-models.sh gemma3:12b gemma3:4b
+./bin/pull-dual-models.sh gemma4:12b gemma3:4b
 ```
 
 **Fast Combo (16GB + 8GB):**
 ```bash
-./bin/pull-dual-models.sh gemma3:12b gemma3:1b
+./bin/pull-dual-models.sh gemma4:12b gemma3:1b
 ```
 
 **Stable Gemma 2:**
@@ -309,7 +314,7 @@ Auto-detects local or remote from your configuration and:
 
 **Three GPU Setup (24GB + 16GB + 8GB):**
 ```bash
-./bin/pull-dual-models.sh gemma3:27b gemma3:12b gemma3:4b
+./bin/pull-dual-models.sh gemma3:27b gemma4:12b gemma3:4b
 ```
 
 ---
@@ -353,7 +358,7 @@ Auto-detects local or remote from your configuration and:
 
 ```bash
 # Add a model to a specific GPU
-./bin/add-model.sh 0 gemma3:12b    # Add to GPU 0
+./bin/add-model.sh 0 gemma4:12b    # Add to GPU 0
 ./bin/add-model.sh 1 gemma3:4b     # Add to GPU 1
 ./bin/add-model.sh                  # Interactive mode
 
@@ -467,7 +472,7 @@ curl http://YOUR_IP:11434/api/tags
 
 # Generate response
 curl http://YOUR_IP:11434/api/generate -d '{
-  "model": "gemma3:12b",
+  "model": "gemma4:12b",
   "prompt": "Explain quantum computing",
   "stream": false
 }'
@@ -509,9 +514,19 @@ FRANKEN_GPU0_NAME="RTX 5060 Ti"
 FRANKEN_GPU1_NAME="RTX 3050"
 
 # Model Configuration
-# Specify which models to use on each GPU
-FRANKEN_GPU0_MODEL="gemma3:12b"
+# Specify which models to use on each GPU (gemma4 models require Ollama >= 0.33)
+FRANKEN_GPU0_MODEL="gemma4:12b"
 FRANKEN_GPU1_MODEL="gemma3:4b"
+
+# Guard/moderation model kept resident on GPU 0 alongside the main model
+# (used for AI moderation; set empty to disable)
+FRANKEN_GPU0_GUARD_MODEL="llama-guard3:8b"
+
+# Per-instance context length (OLLAMA_CONTEXT_LENGTH). Ollama >= 0.33 defaults
+# to 32768, whose KV cache is too large for two resident models on 16GB:
+# gemma4:12b + llama-guard3:8b coexist at 8192 but not at 16384+.
+FRANKEN_GPU0_CONTEXT=8192
+FRANKEN_GPU1_CONTEXT=32768
 ```
 
 Run `./configure.sh` for an interactive setup wizard that will guide you through all options.
@@ -529,7 +544,7 @@ Example configurations:
 **Single GPU Setup:**
 ```bash
 FRANKEN_GPU_COUNT=1
-FRANKEN_GPU0_MODEL="gemma3:12b"
+FRANKEN_GPU0_MODEL="gemma4:12b"
 ```
 
 **Different Model Families:**

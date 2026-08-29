@@ -31,8 +31,20 @@ export FRANKEN_GPU0_NAME="${FRANKEN_GPU0_NAME:-"RTX 5060 Ti"}"
 export FRANKEN_GPU1_NAME="${FRANKEN_GPU1_NAME:-"RTX 3050"}"
 
 # Model configuration
-export FRANKEN_GPU0_MODEL="${FRANKEN_GPU0_MODEL:-gemma3:12b}"
+# gemma4:12b requires Ollama >= 0.33
+export FRANKEN_GPU0_MODEL="${FRANKEN_GPU0_MODEL:-gemma4:12b}"
 export FRANKEN_GPU1_MODEL="${FRANKEN_GPU1_MODEL:-gemma3:4b}"
+
+# Guard/moderation model kept resident on GPU 0 alongside the main model
+# (e.g. llama-guard3:8b for AI moderation). Set empty to disable warmup for it.
+export FRANKEN_GPU0_GUARD_MODEL="${FRANKEN_GPU0_GUARD_MODEL:-llama-guard3:8b}"
+
+# Context length per Ollama instance (OLLAMA_CONTEXT_LENGTH in the systemd units).
+# Ollama >= 0.33 defaults to 32768, which blows the KV-cache budget when two
+# models share a GPU: on a 16GB card, gemma4:12b + llama-guard3:8b both stay
+# resident at 8192 but the guard evicts the main model at 16384+.
+export FRANKEN_GPU0_CONTEXT="${FRANKEN_GPU0_CONTEXT:-8192}"
+export FRANKEN_GPU1_CONTEXT="${FRANKEN_GPU1_CONTEXT:-32768}"
 
 # Detect if we're installing locally or remotely
 if [[ "$FRANKEN_SERVER_IP" == "localhost" || "$FRANKEN_SERVER_IP" == "127.0.0.1" ]]; then

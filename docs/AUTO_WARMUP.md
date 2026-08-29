@@ -34,6 +34,9 @@ This will:
 1. **Ollama services start** on boot (ollama-gpu0, ollama-gpu1)
 2. **Warmup service activates** and waits for Ollama to be ready
 3. **Models are loaded** into GPU memory based on your `.env` configuration
+   - GPU 0 also warms `FRANKEN_GPU0_GUARD_MODEL` (default `llama-guard3:8b`)
+     so the AI-moderation model is resident before the first moderation
+     request arrives — set it empty to skip
 4. **System is ready** for immediate use
 
 ## Setup
@@ -60,7 +63,7 @@ For remote servers, run the installation first, then setup warmup:
 ./install.sh
 
 # 2. Pull your models
-./bin/pull-dual-models.sh gemma3:12b gemma3:4b
+./bin/pull-dual-models.sh gemma4:12b gemma3:4b
 
 # 3. Setup warmup service
 ./remote/setup-warmup.sh
@@ -100,12 +103,19 @@ Warmup can also use your `.env` configuration as fallback:
 
 ```bash
 # Models to load on boot
-FRANKEN_GPU0_MODEL="gemma3:12b"
+FRANKEN_GPU0_MODEL="gemma4:12b"
 FRANKEN_GPU1_MODEL="gemma3:4b"
+
+# Guard/moderation model warmed alongside the GPU 0 main model
+FRANKEN_GPU0_GUARD_MODEL="llama-guard3:8b"
 
 # Number of GPUs
 FRANKEN_GPU_COUNT=2
 ```
+
+**Note:** the warmup requests run against `localhost` ports on the server, so
+`FRANKEN_SERVER_IP` in the *deployed* `/opt/frankenllm/.env` must be
+`localhost` (a stale LAN IP there makes boot warmup fail silently).
 
 **Important**: Make sure these models are already pulled before enabling warmup!
 
@@ -263,6 +273,7 @@ This copies the necessary files and creates the service.
 5. frankenllm-warmup.service starts
    - Waits for Ollama services to respond
    - Loads FRANKEN_GPU0_MODEL on GPU 0
+   - Loads FRANKEN_GPU0_GUARD_MODEL on GPU 0 (if set)
    - Loads FRANKEN_GPU1_MODEL on GPU 1
    - Logs completion to journal
 6. System ready for use
