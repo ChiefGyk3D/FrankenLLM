@@ -191,7 +191,7 @@ do_warmup() {
             if [ -n "$model" ]; then
                 echo -e "${BLUE}Loading $model on GPU $i ($name)...${NC}"
                 
-                # Same num_ctx + keep_alive -1 as warmup-models.sh (see warmup-lib.sh)
+                # Same request as warmup-models.sh (keep_alive -1, no num_ctx for main models); see warmup-lib.sh
                 local host="$FRANKEN_SERVER_IP"
                 [ "$FRANKEN_IS_LOCAL" = true ] && host="127.0.0.1"
                 franken_warmup_load "$host" "$port" "$model" \
@@ -213,7 +213,7 @@ do_warmup() {
             if [ -n "$model" ]; then
                 echo -e "${BLUE}Loading $model on GPU $i ($name)...${NC}"
                 
-                # Same num_ctx + keep_alive -1 as warmup-models.sh (see warmup-lib.sh)
+                # Same request as warmup-models.sh (keep_alive -1, no num_ctx for main models); see warmup-lib.sh
                 local host="$FRANKEN_SERVER_IP"
                 [ "$FRANKEN_IS_LOCAL" = true ] && host="127.0.0.1"
                 franken_warmup_load "$host" "$port" "$model" \

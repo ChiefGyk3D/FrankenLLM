@@ -271,8 +271,10 @@ FRANKEN_GPU0_GUARD_MODEL="llama-guard3:8b"
 FRANKEN_GPU0_CONTEXT=8192
 FRANKEN_GPU1_CONTEXT=32768
 
-# Optional: a second resident model on GPU 0, a guard on GPU 1, per-model contexts
-# (all empty by default). See CONFIGURATION.md "Per-Model Layout and Context".
+# Single GPU or small card: FRANKEN_GPU_COUNT=1, a modest FRANKEN_GPU0_CONTEXT, and
+# FRANKEN_GPU0_GUARD_MODEL= (empty) if you do not run AI moderation.
+# Optional extras, all empty by default: a second model on GPU 0, a guard on GPU 1,
+# warm-up contexts for them. See CONFIGURATION.md "Per-Model Layout and Context".
 ```
 
 Run `./configure.sh` for an interactive setup wizard that will guide you through all options.

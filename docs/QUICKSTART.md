@@ -75,9 +75,9 @@ curl http://YOUR_IP:11435/api/generate -d '{
 
 **16GB GPU + AI moderation:** `gemma4:12b` + `llama-guard3:8b` both stay resident at 8192 context (`FRANKEN_GPU0_CONTEXT=8192`)
 
-**16GB + 8GB (backbone at 65536, guard on the small card):** see the worked example in [CONFIGURATION.md](CONFIGURATION.md#per-model-layout-and-context). Clients must send the same `num_ctx` the model was warmed with.
+**One GPU / small card:** set `FRANKEN_GPU_COUNT=1`, a modest `FRANKEN_GPU0_CONTEXT`, and `FRANKEN_GPU0_GUARD_MODEL=` (empty) if you do not run AI moderation; see [CONFIGURATION.md](CONFIGURATION.md#single-gpu--small-card-start-here). An optional 16GB + 8GB split layout is also described there.
 
-**8GB GPU:** `qwen3.5:4b` (default for GPU 1; send `think: false` for cheap tasks), `gemma3:4b`, `gemma3:1b`, `gemma2:2b`, `llama3.2:3b`, `phi3:3.8b`
+**8GB GPU:** `qwen3.5:4b` (default for GPU 1; it thinks by default, so send `think: false` for cheap tasks), `gemma3:4b`, `gemma3:1b`, `gemma2:2b`, `llama3.2:3b`, `phi3:3.8b`
 
 ## 🆘 Troubleshooting
 

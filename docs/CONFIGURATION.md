@@ -74,8 +74,10 @@ FRANKEN_GPU0_CONTEXT=8192
 FRANKEN_GPU1_CONTEXT=32768
 ```
 
-Optional extras (all empty/unset by default, which leaves the layout above
-unchanged) are covered in [Per-Model Layout and Context](#per-model-layout-and-context).
+Single GPU or small card? Start with
+[Per-Model Layout and Context](#per-model-layout-and-context): the guard model is
+optional (`FRANKEN_GPU0_GUARD_MODEL=` disables it). The extras there (all
+empty/unset by default) leave the layout above unchanged.
 
 **Dual-resident VRAM budget (16GB GPU):** Ollama >= 0.33 defaults to a 32768
 context, and the KV cache scales with it (~130MB per 1K tokens for an 8B
@@ -358,125 +360,157 @@ FRANKEN_GPU0_CONTEXT      # OLLAMA_CONTEXT_LENGTH for GPU 0's instance (default 
 FRANKEN_GPU1_CONTEXT      # OLLAMA_CONTEXT_LENGTH for GPU 1's instance (default 32768)
 
 # Per-model layout (all default empty = off / instance context)
-FRANKEN_GPU1_GUARD_MODEL    # Guard model warmed on GPU 1
-FRANKEN_GPU0_GUARD_CONTEXT  # num_ctx for the GPU 0 guard (empty = FRANKEN_GPU0_CONTEXT)
-FRANKEN_GPU1_GUARD_CONTEXT  # num_ctx for the GPU 1 guard (empty = FRANKEN_GPU1_CONTEXT)
+FRANKEN_GPU1_GUARD_MODEL    # Guard model warmed on GPU 1 (ignored with FRANKEN_GPU_COUNT=1)
+FRANKEN_GPU0_GUARD_CONTEXT  # num_ctx sent when warming the GPU 0 guard (empty = send none)
+FRANKEN_GPU1_GUARD_CONTEXT  # num_ctx sent when warming the GPU 1 guard (empty = send none)
 FRANKEN_GPU0_EXTRA_MODEL    # Second resident model on GPU 0
-FRANKEN_GPU0_EXTRA_CONTEXT  # num_ctx for that model (empty = FRANKEN_GPU0_CONTEXT)
+FRANKEN_GPU0_EXTRA_CONTEXT  # num_ctx sent when warming that model (empty = send none)
 FRANKEN_GPU0_WARMUP_TIMEOUT # Seconds to wait for a GPU 0 load (default 180)
 FRANKEN_GPU1_WARMUP_TIMEOUT # Seconds to wait for a GPU 1 load (default 120)
 ```
 
 ## Per-Model Layout and Context
 
+### Single GPU / small card (start here)
+
+One GPU, or cards with little VRAM, need nothing from the split layout below.
+
+```bash
+FRANKEN_GPU_COUNT=1
+FRANKEN_GPU0_MODEL="<model>"       # something that fits your card with room for the KV cache
+FRANKEN_GPU0_CONTEXT=8192          # modest; raise it only after checking VRAM (see below)
+
+# The guard/moderation model is OPTIONAL. Its default is llama-guard3:8b, which
+# is ~5 GB on its own; if you do not run AI moderation, turn it off:
+FRANKEN_GPU0_GUARD_MODEL=
+```
+
+- The guard model is only for AI-moderation bots. If nothing of yours calls it,
+  set `FRANKEN_GPU0_GUARD_MODEL=` (explicitly empty) so it is never loaded.
+- `FRANKEN_GPU0_CONTEXT` is the instance's `OLLAMA_CONTEXT_LENGTH`. The KV cache
+  grows with it, so on a small card keep it modest (8192 is the default) and
+  confirm with `ollama ps` that the model shows `100% GPU`.
+- `FRANKEN_GPU1_GUARD_MODEL` is ignored with `FRANKEN_GPU_COUNT=1`; warm-up prints
+  a warning if it is set.
+- Nothing else in this section is needed. Every other variable below defaults to
+  empty.
+
 ### How warm-up loads a model
 
-`./bin/warmup-models.sh` loads every model with two extra request fields:
+`./bin/warmup-models.sh` sends every model a tiny request with `keep_alive: -1`
+(keep it resident):
 
-- `options.num_ctx`: the model's own context setting, falling back to its
-  instance's (`FRANKEN_GPU0_CONTEXT` / `FRANKEN_GPU1_CONTEXT`).
-- `keep_alive: -1`: keep it resident.
+| Model | `options.num_ctx` sent | Context it runs at |
+|-------|------------------------|--------------------|
+| `FRANKEN_GPU0_MODEL`, `FRANKEN_GPU1_MODEL` (main models) | never | the instance's `FRANKEN_GPUn_CONTEXT` |
+| `FRANKEN_GPU0_GUARD_MODEL`, `FRANKEN_GPU1_GUARD_MODEL`, `FRANKEN_GPU0_EXTRA_MODEL` | only if its own `*_GUARD_CONTEXT` / `*_EXTRA_CONTEXT` is set | its own setting, else the instance's |
 
-| Model | Context used |
-|-------|--------------|
-| `FRANKEN_GPU0_MODEL` | `FRANKEN_GPU0_CONTEXT` |
-| `FRANKEN_GPU0_GUARD_MODEL` | `FRANKEN_GPU0_GUARD_CONTEXT`, else `FRANKEN_GPU0_CONTEXT` |
-| `FRANKEN_GPU0_EXTRA_MODEL` | `FRANKEN_GPU0_EXTRA_CONTEXT`, else `FRANKEN_GPU0_CONTEXT` |
-| `FRANKEN_GPU1_MODEL` | `FRANKEN_GPU1_CONTEXT` |
-| `FRANKEN_GPU1_GUARD_MODEL` | `FRANKEN_GPU1_GUARD_CONTEXT`, else `FRANKEN_GPU1_CONTEXT` |
+A main model's context therefore comes only from `FRANKEN_GPUn_CONTEXT`, which
+is written into the systemd unit as `OLLAMA_CONTEXT_LENGTH`. After changing it,
+re-run `./scripts/install-ollama-native.sh` (or edit the
+`Environment="OLLAMA_CONTEXT_LENGTH=..."` line in
+`/etc/systemd/system/ollama-gpu0.service` / `ollama-gpu1.service`), then
+`sudo systemctl daemon-reload` and restart the instance. Changing the `.env`
+value alone does not change the running instance.
 
-`FRANKEN_GPUn_CONTEXT` is also `OLLAMA_CONTEXT_LENGTH` for that whole instance,
-so it is the context any client gets when it does not send `num_ctx`.
+> **Clients must send the same `num_ctx` the extra or guard model was warmed
+> with.** Ollama keys a loaded model on its context size; a request with a
+> different `num_ctx` makes it unload and reload the model, which costs the load
+> time and can evict a neighbour. For a model warmed at its own size, set that
+> size in the client (for example `"options": {"num_ctx": 8192}` in the API, or
+> Advanced Params > Context Length in Open WebUI). Clients of a main model that
+> send no `num_ctx` get the instance context, which is what warm-up used.
 
-> **Clients must send the same `num_ctx` that warm-up used.** Ollama keys a
-> loaded model on its context size. A request with a different `num_ctx` (or none,
-> when the model was warmed at a non-default size) makes Ollama unload and reload
-> the model, which costs the load time and can evict a neighbour. For a model
-> warmed at a per-model size, set that size in the client (for example
-> `"options": {"num_ctx": 8192}` in the API, or Advanced Params > Context Length in
-> Open WebUI).
+Warm-up requests have a timeout per model (`FRANKEN_GPU0_WARMUP_TIMEOUT`, default
+180 s; `FRANKEN_GPU1_WARMUP_TIMEOUT`, default 120 s), run one after another, and
+the script exits 1 if any model failed to load (see
+[AUTO_WARMUP.md](AUTO_WARMUP.md)). Model names must match
+`[A-Za-z0-9._:/@-]+` and contexts must be whole numbers, otherwise that model
+fails with a clear message instead of sending a malformed request.
 
-### Cheap tasks: send `think: false`
+`./bin/warmup-config.sh warmup` (the interactive config) follows the same rules
+for the model you picked per GPU, but it does **not** warm
+`FRANKEN_GPU0_EXTRA_MODEL` or `FRANKEN_GPU1_GUARD_MODEL`; use
+`./bin/warmup-models.sh` for those.
 
-Qwen3.5 thinks by default. For one-sentence tasks (classification, titles,
-summaries) turn it off per request:
+### Thinking models: send `think: false` for cheap tasks
+
+Models that think before answering (Qwen3.5 is one) spend tokens on the thinking
+for every request. For short, simple tasks (classification, titles, one-sentence
+summaries) turn it off per request if the model supports it:
 
 ```bash
 curl -s http://$FRANKEN_SERVER_IP:11434/api/chat -d '{
-  "model": "qwen3.5:4b",
+  "model": "<thinking-model>",
   "messages": [{"role": "user", "content": "Summarize in one sentence: ..."}],
   "think": false,
-  "stream": false,
-  "options": {"num_ctx": 8192}
+  "stream": false
 }'
 ```
 
-Measured on 2026-10-07, a one-sentence Qwen3.5 task cost about 15x fewer
-tokens with thinking off than with it on.
+On one maintainer setup, a one-sentence task with a thinking model used far fewer
+tokens with thinking off; measure on your own models before relying on a number.
 
-### Worked example: 16 GB card + 8 GB card
+### Optional: 16 GB card + 8 GB card split layout
 
-Layout: the backbone model alone at a large context on the large card, next to a
-small cheap-task model; the guard model by itself on the small card.
+This is one worked example, not a default. Placeholders are shown where your
+choices belong; the sizes are the part that matters. Layout: the backbone model
+alone at a large context on the large card next to a small cheap-task model, and
+the guard model by itself on the small card.
 
 ```bash
 # GPU 0 (16 GB): backbone at a large context + a small extra model
-FRANKEN_GPU0_MODEL="gemma4:12b"
-FRANKEN_GPU0_CONTEXT=65536
+FRANKEN_GPU0_MODEL="<backbone-model>"
+FRANKEN_GPU0_CONTEXT=65536             # the instance context; the backbone inherits it
 FRANKEN_GPU0_GUARD_MODEL=              # explicitly empty: the guard moves to GPU 1
-FRANKEN_GPU0_EXTRA_MODEL="qwen3.5:4b"
-FRANKEN_GPU0_EXTRA_CONTEXT=8192
+FRANKEN_GPU0_EXTRA_MODEL="<small-model>"
+FRANKEN_GPU0_EXTRA_CONTEXT=8192        # sent at warm-up; clients must send 8192 too
 
 # GPU 1 (8 GB): the guard model alone
-FRANKEN_GPU1_MODEL="llama-guard3:8b"
+FRANKEN_GPU1_MODEL="<guard-model>"
 FRANKEN_GPU1_CONTEXT=8192
 ```
 
-`FRANKEN_GPU1_MODEL` is always warmed, so on a guard-only card the guard is simply
-that card's main model. `FRANKEN_GPU1_GUARD_MODEL` is for a card that also hosts a
-main model next to its guard.
+`FRANKEN_GPU1_MODEL` is always warmed, so on a guard-only card the guard is
+simply that card's main model. `FRANKEN_GPU1_GUARD_MODEL` is for a card that also
+hosts a main model next to its guard.
 
-**VRAM caveat:** the sizes above are estimates. The KV cache grows with context
-(roughly 130 MB per 1K tokens for an 8B model), so 65536 on the 16 GB card is the
+**VRAM caveat:** every size here is an estimate. The KV cache grows with context
+(roughly 130 MB per 1K tokens for an 8B model), so 65536 on the large card is the
 number most likely to need lowering. After warm-up, confirm with `ollama ps`
-(both should show `100% GPU`) and `nvidia-smi`. If the backbone and the extra
-model do not both fit, lower `FRANKEN_GPU0_CONTEXT` or drop the extra model.
+(each model should show `100% GPU`) and `nvidia-smi`. If the backbone and the
+extra model do not both fit, lower `FRANKEN_GPU0_CONTEXT` or drop the extra model.
 
-### Migrating an existing install to this layout
+#### Migrating an existing install to a layout like this
 
 1. Back up: `cp .env .env.backup`
-2. Edit `.env` on the server: apply the variables from the worked example
-   (change `FRANKEN_GPU0_CONTEXT` and `FRANKEN_GPU1_CONTEXT`, set
-   `FRANKEN_GPU0_GUARD_MODEL=` empty, set `FRANKEN_GPU0_EXTRA_MODEL` and
-   `FRANKEN_GPU1_MODEL`). Keep `FRANKEN_SERVER_IP=localhost` in the deployed `.env`.
-3. Pull what is new on the right card, for example
-   `./bin/add-model.sh 1 llama-guard3:8b` and `./bin/add-model.sh 0 qwen3.5:4b`.
-4. Write the new `OLLAMA_CONTEXT_LENGTH` into the systemd units, then restart
-   **both** instances (a context change only takes effect on restart). Either
-   re-run `./scripts/install-ollama-native.sh` (it rewrites the unit files from
-   `.env`, and also re-runs the Ollama installer), or edit the
-   `Environment="OLLAMA_CONTEXT_LENGTH=..."` line in
-   `/etc/systemd/system/ollama-gpu0.service` and `ollama-gpu1.service` by hand:
+2. Edit `.env` on the server with the variables above. Keep
+   `FRANKEN_SERVER_IP=localhost` in the deployed `.env`.
+3. Pull what is new onto the right card, for example
+   `./bin/add-model.sh 1 <guard-model>` and `./bin/add-model.sh 0 <small-model>`.
+4. Write the new `OLLAMA_CONTEXT_LENGTH` values into the units (re-run
+   `./scripts/install-ollama-native.sh`, which also re-runs the Ollama installer,
+   or edit the two unit files by hand), then restart **both** instances:
    ```bash
    sudo systemctl daemon-reload
    sudo systemctl restart ollama-gpu0 ollama-gpu1
    ```
-5. Re-run warm-up: `./bin/warmup-models.sh`
+5. Re-run warm-up: `./bin/warmup-models.sh` (check that it exits 0).
 6. Verify what is resident and at what size, on each instance:
    ```bash
-   curl -s http://localhost:11434/api/ps | jq '.models[] | {name, size_vram, context_length}'
-   curl -s http://localhost:11435/api/ps | jq '.models[] | {name, size_vram, context_length}'
+   curl -s http://localhost:11434/api/ps | jq '.models[] | {name, size, size_vram, context_length}'
+   curl -s http://localhost:11435/api/ps | jq '.models[] | {name, size, size_vram, context_length}'
    ```
-   `size_vram` should equal `size` for every model (fully on GPU), and
-   `context_length` should match the contexts you set (if your Ollama version
-   does not report it, use `ollama ps`).
-7. Update every client to send the matching `num_ctx` (see above).
+   `size_vram` should equal `size` for every model (fully on GPU). If your Ollama
+   version does not report `context_length`, use `ollama ps`.
+7. Update every client to send the matching `num_ctx` for the extra/guard model.
 
-Existing installs that change nothing keep their layout: the new variables default
-to empty, so the same models load at the same contexts as before. The only visible
-differences are the explicit `num_ctx`/`keep_alive` fields in the warm-up request,
-which equal what the instance already used, and the new default
-`FRANKEN_GPU1_MODEL` of `qwen3.5:4b` for installs that never set it.
+An install that changes nothing keeps its layout: the new variables default to
+empty, so the same models load at the same instance contexts as before. The
+differences are listed in the pull request that introduced them: the
+`FRANKEN_GPU1_MODEL` default, the GPU 1 warm-up timeout, `keep_alive: -1` in the
+warm-up request, stricter failure handling, and `FRANKEN_GPU0_GUARD_MODEL=` empty
+now really disabling the guard.
 
 ## Best Practices
 

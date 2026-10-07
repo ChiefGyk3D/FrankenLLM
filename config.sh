@@ -49,20 +49,22 @@ export FRANKEN_GPU0_CONTEXT="${FRANKEN_GPU0_CONTEXT:-8192}"
 export FRANKEN_GPU1_CONTEXT="${FRANKEN_GPU1_CONTEXT:-32768}"
 
 # --- Optional per-model layout (all empty/unset by default = no change) -----
-# Warm-up sends options.num_ctx for every model it loads. A model uses its own
-# *_CONTEXT below when set, otherwise the instance context above. Clients must
-# send the SAME num_ctx or Ollama reloads the model (see docs/CONFIGURATION.md).
+# Main models (FRANKEN_GPU0_MODEL / FRANKEN_GPU1_MODEL) are warmed with no num_ctx,
+# so they run at the instance context above. A guard/extra model sends num_ctx
+# at warm-up ONLY when its own *_CONTEXT below is set (empty = none sent, it uses
+# the instance context too). Clients must send the SAME num_ctx or Ollama reloads
+# the model (see docs/CONFIGURATION.md).
 
 # Guard/moderation model on GPU 1 (e.g. llama-guard3:8b on the small card).
-# Empty = not warmed. Its context falls back to FRANKEN_GPU1_CONTEXT.
+# Empty = not warmed. Ignored (with a warning) when FRANKEN_GPU_COUNT=1.
 export FRANKEN_GPU1_GUARD_MODEL="${FRANKEN_GPU1_GUARD_MODEL:-}"
 
-# Per-model context for the guard models (empty = use the instance context).
+# num_ctx sent when warming the guard models (empty = send none).
 export FRANKEN_GPU0_GUARD_CONTEXT="${FRANKEN_GPU0_GUARD_CONTEXT:-}"
 export FRANKEN_GPU1_GUARD_CONTEXT="${FRANKEN_GPU1_GUARD_CONTEXT:-}"
 
 # Optional second resident model on GPU 0 (e.g. a small cheap-task model next
-# to the backbone). Empty = not warmed. Context falls back to FRANKEN_GPU0_CONTEXT.
+# to the backbone). Empty = not warmed. EXTRA_CONTEXT empty = send no num_ctx.
 export FRANKEN_GPU0_EXTRA_MODEL="${FRANKEN_GPU0_EXTRA_MODEL:-}"
 export FRANKEN_GPU0_EXTRA_CONTEXT="${FRANKEN_GPU0_EXTRA_CONTEXT:-}"
 

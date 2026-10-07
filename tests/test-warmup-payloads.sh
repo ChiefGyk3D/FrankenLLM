@@ -28,6 +28,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 printf '%s\t%s\t%s\n' "$timeout" "$url" "$body" >> "$STUB_LOG"
+if [ -n "${STUB_FAIL_MODEL:-}" ] && [[ "$body" == *"\"model\": \"$STUB_FAIL_MODEL\""* ]]; then
+    printf '{"error":"model not found"}'
+    exit 0
+fi
 printf '%s' "${STUB_REPLY:-{\"response\":\"ok\"}}"
 STUB
 chmod +x "$WORK/stub/curl"
@@ -51,80 +55,136 @@ run_warmup() {
     LOGFILE="$WORK/curl.log"
     : > "$LOGFILE"
     OUT=$(env -i PATH="$WORK/stub:$PATH" HOME="$WORK" STUB_LOG="$LOGFILE" \
-        FRANKEN_SERVER_IP=test-host "$@" bash "$WORK/bin/warmup-models.sh" 2>&1)
+        FRANKEN_SERVER_IP=test-host "$@" bash "$WORK/bin/warmup-models.sh" 2>"$WORK/stderr")
+    RC=$?
+    ERR=$(cat "$WORK/stderr")
     LOG=$(cat "$LOGFILE")
 }
 # field <line-number> <1=timeout|2=url|3=body>
 field() { sed -n "${1}p" <<< "$LOG" | cut -f"$2"; }
 body() { field "$1" 3 | jq -c "$2"; }
 
-# --- 1. Defaults: existing installs keep their layout, now with num_ctx ------
+# --- 1. Defaults: same requests as before, plus keep_alive and NO num_ctx ----
 run_warmup
+check "defaults: exit 0" 0 "$RC"
 check "defaults: three requests" 3 "$(wc -l <<< "$LOG")"
-check "defaults: gpu0 model+ctx" '["gemma4:12b",8192,-1]' "$(body 1 '[.model,.options.num_ctx,.keep_alive]')"
+check "defaults: gpu0 model, no num_ctx, keep_alive" '["gemma4:12b",null,-1]' "$(body 1 '[.model,.options.num_ctx,.keep_alive]')"
+check "defaults: gpu0 has no options at all" false "$(body 1 'has("options")')"
 check "defaults: gpu0 url" "http://test-host:11434/api/generate" "$(field 1 2)"
 check "defaults: gpu0 timeout" 180 "$(field 1 1)"
-check "defaults: guard model+ctx" '["llama-guard3:8b",8192,-1]' "$(body 2 '[.model,.options.num_ctx,.keep_alive]')"
-check "defaults: gpu1 model+ctx" '["qwen3.5:4b",32768,-1]' "$(body 3 '[.model,.options.num_ctx,.keep_alive]')"
+check "defaults: guard model, no num_ctx" '["llama-guard3:8b",false]' "$(body 2 '[.model,has("options")]')"
+check "defaults: gpu1 model, no num_ctx" '["qwen3.5:4b",false,-1]' "$(body 3 '[.model,has("options"),.keep_alive]')"
 check "defaults: gpu1 url" "http://test-host:11435/api/generate" "$(field 3 2)"
 check "defaults: gpu1 timeout" 120 "$(field 3 1)"
 check "defaults: stream off" false "$(body 1 '.stream')"
 check "defaults: bodies are valid JSON" 3 "$(cut -f3 <<< "$LOG" | jq -c . | wc -l)"
+check "defaults: no failure section" 0 "$(grep -c FAILED <<< "$OUT")"
 
-# --- 2. Recommended 16 GB + 8 GB layout --------------------------------------
+# --- 2. Single GPU, NO new variables set --------------------------------------
+run_warmup FRANKEN_GPU_COUNT=1
+check "single gpu: exit 0" 0 "$RC"
+check "single gpu: main + default guard only" 2 "$(wc -l <<< "$LOG")"
+check "single gpu: nothing sent to gpu1" 0 "$(grep -c ':11435/' <<< "$LOG")"
+check "single gpu: main body has no options" false "$(body 1 'has("options")')"
+check "single gpu: no warning" "" "$ERR"
+run_warmup FRANKEN_GPU_COUNT=1 FRANKEN_GPU0_GUARD_MODEL=
+check "single gpu, guard disabled: only the main model" 1 "$(wc -l <<< "$LOG")"
+check "single gpu, guard disabled: it is the main model" gemma4:12b "$(body 1 .model | tr -d '"')"
+
+# --- 3. Warn when a GPU1 guard is set on a one-GPU install ---------------------
+run_warmup FRANKEN_GPU_COUNT=1 FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b FRANKEN_GPU0_GUARD_MODEL=
+check "gpu1 guard on one gpu: warns on stderr" 1 "$(grep -c 'FRANKEN_GPU1_GUARD_MODEL is set' <<< "$ERR")"
+check "gpu1 guard on one gpu: not sent" 1 "$(wc -l <<< "$LOG")"
+run_warmup FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b
+check "no warning on two gpus" 0 "$(grep -c 'WARNING' <<< "$ERR")"
+
+# --- 4. Optional split layout (placeholders for the card sizes) ---------------
 run_warmup FRANKEN_GPU0_MODEL=gemma4:12b FRANKEN_GPU0_CONTEXT=65536 \
     FRANKEN_GPU0_GUARD_MODEL= \
     FRANKEN_GPU0_EXTRA_MODEL=qwen3.5:4b FRANKEN_GPU0_EXTRA_CONTEXT=8192 \
     FRANKEN_GPU1_MODEL=llama-guard3:8b FRANKEN_GPU1_CONTEXT=8192
-check "layout: three requests" 3 "$(wc -l <<< "$LOG")"
-check "layout: backbone at 65536" '["gemma4:12b",65536]' "$(body 1 '[.model,.options.num_ctx]')"
-check "layout: extra on gpu0 at its own ctx" '["qwen3.5:4b",8192]' "$(body 2 '[.model,.options.num_ctx]')"
-check "layout: extra goes to gpu0 port" "http://test-host:11434/api/generate" "$(field 2 2)"
-check "layout: guard on gpu1 at 8192" '["llama-guard3:8b",8192]' "$(body 3 '[.model,.options.num_ctx]')"
-check "layout: guard goes to gpu1 port" "http://test-host:11435/api/generate" "$(field 3 2)"
+check "split: three requests" 3 "$(wc -l <<< "$LOG")"
+check "split: backbone sends no num_ctx (instance context applies)" false "$(body 1 'has("options")')"
+check "split: extra sends its own ctx" '["qwen3.5:4b",8192]' "$(body 2 '[.model,.options.num_ctx]')"
+check "split: extra goes to gpu0" "http://test-host:11434/api/generate" "$(field 2 2)"
+check "split: gpu1 main sends no num_ctx" false "$(body 3 'has("options")')"
 
-# --- 3. GPU1 guard + per-model contexts + fallbacks --------------------------
-run_warmup FRANKEN_GPU0_GUARD_MODEL= FRANKEN_GPU1_MODEL=qwen3.5:4b \
-    FRANKEN_GPU1_CONTEXT=16384 FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b \
+# --- 5. Guard/extra num_ctx only when their own *_CONTEXT is set --------------
+run_warmup FRANKEN_GPU0_GUARD_MODEL= FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b \
+    FRANKEN_GPU1_GUARD_CONTEXT=4096 FRANKEN_GPU1_CONTEXT=16384 \
     FRANKEN_GPU0_EXTRA_MODEL=qwen3.5:4b
 check "gpu1 guard: four requests" 4 "$(wc -l <<< "$LOG")"
-check "extra without own ctx falls back to instance ctx" 8192 "$(body 2 '.options.num_ctx')"
-check "gpu1 guard falls back to gpu1 instance ctx" '["llama-guard3:8b",16384]' "$(body 4 '[.model,.options.num_ctx]')"
-run_warmup FRANKEN_GPU0_GUARD_MODEL= FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b \
-    FRANKEN_GPU1_GUARD_CONTEXT=4096 FRANKEN_GPU1_CONTEXT=16384
-check "gpu1 guard own ctx wins" 4096 "$(body 3 '.options.num_ctx')"
+check "extra with no ctx sends no options" false "$(body 2 'has("options")')"
+check "gpu1 guard own ctx sent" '["llama-guard3:8b",4096]' "$(body 4 '[.model,.options.num_ctx]')"
+run_warmup FRANKEN_GPU0_GUARD_MODEL=llama-guard3:8b FRANKEN_GPU0_GUARD_CONTEXT=2048
+check "gpu0 guard own ctx sent" 2048 "$(body 2 '.options.num_ctx')"
+run_warmup FRANKEN_GPU0_GUARD_MODEL=llama-guard3:8b FRANKEN_GPU0_CONTEXT=65536
+check "instance ctx never leaks into guard body" false "$(body 2 'has("options")')"
 
-# --- 4. Configurable timeouts -------------------------------------------------
+# --- 6. Configurable timeouts -------------------------------------------------
 run_warmup FRANKEN_GPU0_GUARD_MODEL= FRANKEN_GPU0_WARMUP_TIMEOUT=300 FRANKEN_GPU1_WARMUP_TIMEOUT=45
 check "gpu0 timeout override" 300 "$(field 1 1)"
 check "gpu1 timeout override" 45 "$(field 2 1)"
 
-# --- 5. Single GPU: nothing is sent to GPU 1 ----------------------------------
-run_warmup FRANKEN_GPU_COUNT=1 FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b
-check "single gpu: no gpu1 requests" 0 "$(grep -c ':11435/' <<< "$LOG")"
-
-# --- 6. Command-line model args still win -------------------------------------
+# --- 7. Command-line model args still win -------------------------------------
 LOGFILE="$WORK/curl.log"
 : > "$LOGFILE"
-OUT=$(env -i PATH="$WORK/stub:$PATH" HOME="$WORK" STUB_LOG="$WORK/curl.log" \
-    FRANKEN_SERVER_IP=test-host FRANKEN_GPU0_GUARD_MODEL= \
-    bash "$WORK/bin/warmup-models.sh" argA:1b argB:2b 2>&1)
-check "cli args: gpu0" argA:1b "$(jq -r .model <<< "$(sed -n 1p "$WORK/curl.log" | cut -f3)")"
-check "cli args: gpu1" argB:2b "$(jq -r .model <<< "$(sed -n 2p "$WORK/curl.log" | cut -f3)")"
+env -i PATH="$WORK/stub:$PATH" HOME="$WORK" STUB_LOG="$LOGFILE" FRANKEN_SERVER_IP=test-host \
+    FRANKEN_GPU0_GUARD_MODEL= bash "$WORK/bin/warmup-models.sh" argA:1b argB:2b > /dev/null 2>&1
+check "cli args: gpu0" argA:1b "$(jq -r .model <<< "$(sed -n 1p "$LOGFILE" | cut -f3)")"
+check "cli args: gpu1" argB:2b "$(jq -r .model <<< "$(sed -n 2p "$LOGFILE" | cut -f3)")"
 
-# --- 7. Failure is reported ---------------------------------------------------
-run_warmup STUB_REPLY='{"error":"model not found"}' FRANKEN_GPU0_GUARD_MODEL=
-check "failure reported" 2 "$(grep -c 'Failed to load' <<< "$OUT")"
+# --- 8. One model fails, the others succeed ------------------------------------
+run_warmup STUB_FAIL_MODEL=llama-guard3:8b
+check "one failure: exit 1" 1 "$RC"
+check "one failure: all three still attempted" 3 "$(wc -l <<< "$LOG")"
+check "one failure: reported once as failed to load" 1 "$(grep -c 'Failed to load' <<< "$OUT")"
+check "one failure: summary lists the failure" 1 "$(sed -n '/^FAILED/,$p' <<< "$OUT" | grep -c 'llama-guard3:8b')"
+check "one failure: failed model is not listed as ready" 0 "$(sed -n '/^Loaded/,/^FAILED/p' <<< "$OUT" | grep -c 'llama-guard3:8b')"
+check "one failure: others listed as loaded" 2 "$(sed -n '/^Loaded/,/^FAILED/p' <<< "$OUT" | grep -c '✅')"
+run_warmup STUB_REPLY='{"error":"model not found"}'
+check "all fail: exit 1" 1 "$RC"
+check "all fail: nothing loaded" 0 "$(grep -c '^Loaded' <<< "$OUT")"
 
-# --- 8. Context lookup helper (also used by warmup-config.sh) ----------------
+# --- 9. Validation of values put into the JSON body ---------------------------
+run_warmup FRANKEN_GPU0_GUARD_MODEL='bad"model'
+check "bad model name: exit 1" 1 "$RC"
+check "bad model name: clear message" 1 "$(grep -c 'invalid model name' <<< "$OUT")"
+check "bad model name: not sent" 2 "$(wc -l <<< "$LOG")"
+run_warmup FRANKEN_GPU0_GUARD_MODEL='x; $(id)'
+check "shell metacharacters rejected" 1 "$(grep -c 'invalid model name' <<< "$OUT")"
+run_warmup FRANKEN_GPU0_EXTRA_MODEL=qwen3.5:4b FRANKEN_GPU0_EXTRA_CONTEXT='8192, "x": 1'
+check "bad context: exit 1" 1 "$RC"
+check "bad context: clear message" 1 "$(grep -c 'invalid context' <<< "$OUT")"
+check "bad context: not sent" 3 "$(wc -l <<< "$LOG")"
+run_warmup FRANKEN_GPU0_GUARD_MODEL=registry.example/ns/model-name_v2:1.5b@sha
+check "legal odd name accepted" 0 "$RC"
+
+# --- 10. Reply check: quoted key, with and without jq --------------------------
+run_warmup STUB_REPLY='{"error":"the word response is in this error"}'
+check "reply check: bare word is not success" 1 "$RC"
+NOJQ=$(mktemp -d)
+for t in bash env cat sed cut grep sort tr wc head tail mktemp dirname; do ln -s "$(command -v $t)" "$NOJQ/$t"; done
+ln -s "$WORK/stub/curl" "$NOJQ/curl"
+: > "$WORK/curl.log"
+env -i PATH="$NOJQ" HOME="$WORK" STUB_LOG="$WORK/curl.log" FRANKEN_SERVER_IP=test-host \
+    FRANKEN_GPU0_GUARD_MODEL= "$NOJQ/bash" "$WORK/bin/warmup-models.sh" > /dev/null 2>&1
+check "reply check without jq: success" 0 "$?"
+env -i PATH="$NOJQ" HOME="$WORK" STUB_LOG="$WORK/curl.log" STUB_REPLY='{"error":"the word response"}' FRANKEN_SERVER_IP=test-host \
+    FRANKEN_GPU0_GUARD_MODEL= "$NOJQ/bash" "$WORK/bin/warmup-models.sh" > /dev/null 2>&1
+check "reply check without jq: failure" 1 "$?"
+rm -rf "$NOJQ"
+
+# --- 11. Context lookup helper (also used by warmup-config.sh) ----------------
 ctx() { # ctx <gpu> <model> [VAR=value ...]
     local gpu="$1" model="$2"; shift 2
     env -i PATH="$PATH" "$@" bash -c "source '$WORK/bin/warmup-lib.sh'; franken_ctx_for_model $gpu $model"
 }
-check "ctx: instance default" 65536 "$(ctx 0 gemma4:12b FRANKEN_GPU0_CONTEXT=65536)"
+check "ctx: main model never gets one" "" "$(ctx 0 gemma4:12b FRANKEN_GPU0_CONTEXT=65536)"
 check "ctx: extra model" 8192 "$(ctx 0 qwen3.5:4b FRANKEN_GPU0_CONTEXT=65536 FRANKEN_GPU0_EXTRA_MODEL=qwen3.5:4b FRANKEN_GPU0_EXTRA_CONTEXT=8192)"
-check "ctx: guard on gpu1" 4096 "$(ctx 1 llama-guard3:8b FRANKEN_GPU1_CONTEXT=8192 FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b FRANKEN_GPU1_GUARD_CONTEXT=4096)"
-check "ctx: unset everything" 8192 "$(ctx 1 whatever)"
+check "ctx: extra model with no ctx set" "" "$(ctx 0 qwen3.5:4b FRANKEN_GPU0_EXTRA_MODEL=qwen3.5:4b)"
+check "ctx: guard on gpu1" 4096 "$(ctx 1 llama-guard3:8b FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b FRANKEN_GPU1_GUARD_CONTEXT=4096)"
+check "ctx: unset everything" "" "$(ctx 1 whatever)"
 
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]
