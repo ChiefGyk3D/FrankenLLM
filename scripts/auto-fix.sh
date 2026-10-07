@@ -22,6 +22,7 @@ log() {
 # Read current state
 read_state() {
     if [ -f "$STATE_FILE" ]; then
+        # shellcheck disable=SC1090  # this state file is written by write_state below
         source "$STATE_FILE"
     else
         FAIL_COUNT=0

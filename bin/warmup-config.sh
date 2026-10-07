@@ -56,7 +56,8 @@ get_gpu_name() {
 
 get_models_on_gpu() {
     local gpu=$1
-    local port=$(get_gpu_port $gpu)
+    local port
+    port=$(get_gpu_port "$gpu")
     
     if [ "$FRANKEN_IS_LOCAL" = true ]; then
         OLLAMA_HOST="127.0.0.1:$port" ollama list 2>/dev/null | tail -n +2 | awk '{print $1}'
@@ -81,7 +82,8 @@ show_config() {
         for i in $(seq 0 $((FRANKEN_GPU_COUNT - 1))); do
             local model_var="FRANKEN_GPU${i}_MODEL"
             local model="${!model_var}"
-            local name=$(get_gpu_name $i)
+            local name
+            name=$(get_gpu_name "$i")
             if [ -n "$model" ]; then
                 echo -e "  GPU $i ($name): ${CYAN}$model${NC}"
             else
@@ -94,8 +96,9 @@ show_config() {
     echo "Configured warmup models:"
     echo ""
     for i in $(seq 0 $((FRANKEN_GPU_COUNT - 1))); do
-        local name=$(get_gpu_name $i)
-        local model=$(grep "^GPU${i}=" "$WARMUP_CONFIG" 2>/dev/null | cut -d'=' -f2)
+        local name model
+        name=$(get_gpu_name "$i")
+        model=$(grep "^GPU${i}=" "$WARMUP_CONFIG" 2>/dev/null | cut -d'=' -f2)
         if [ -n "$model" ]; then
             echo -e "  GPU $i ($name): ${GREEN}$model${NC}"
         else
@@ -112,17 +115,19 @@ set_config() {
     echo ""
     
     # Create/clear config
-    > "$WARMUP_CONFIG"
+    : > "$WARMUP_CONFIG"
     
     for i in $(seq 0 $((FRANKEN_GPU_COUNT - 1))); do
-        local name=$(get_gpu_name $i)
-        local port=$(get_gpu_port $i)
+        local name port
+        name=$(get_gpu_name "$i")
+        port=$(get_gpu_port "$i")
         
         echo -e "${CYAN}GPU $i ($name):${NC}"
         echo "Available models:"
         
         # Get available models
-        local models=$(get_models_on_gpu $i)
+        local models
+        models=$(get_models_on_gpu "$i")
         
         if [ -z "$models" ]; then
             echo -e "  ${YELLOW}No models installed on this GPU${NC}"
@@ -185,8 +190,9 @@ do_warmup() {
         for i in $(seq 0 $((FRANKEN_GPU_COUNT - 1))); do
             local model_var="FRANKEN_GPU${i}_MODEL"
             local model="${!model_var}"
-            local port=$(get_gpu_port $i)
-            local name=$(get_gpu_name $i)
+            local port name
+            port=$(get_gpu_port "$i")
+            name=$(get_gpu_name "$i")
             
             if [ -n "$model" ]; then
                 echo -e "${BLUE}Loading $model on GPU $i ($name)...${NC}"
@@ -206,9 +212,10 @@ do_warmup() {
         done
     else
         for i in $(seq 0 $((FRANKEN_GPU_COUNT - 1))); do
-            local model=$(grep "^GPU${i}=" "$config_file" 2>/dev/null | cut -d'=' -f2)
-            local port=$(get_gpu_port $i)
-            local name=$(get_gpu_name $i)
+            local model port name
+            model=$(grep "^GPU${i}=" "$config_file" 2>/dev/null | cut -d'=' -f2)
+            port=$(get_gpu_port "$i")
+            name=$(get_gpu_name "$i")
             
             if [ -n "$model" ]; then
                 echo -e "${BLUE}Loading $model on GPU $i ($name)...${NC}"
@@ -243,13 +250,15 @@ clear_models() {
     echo ""
     
     for i in $(seq 0 $((FRANKEN_GPU_COUNT - 1))); do
-        local port=$(get_gpu_port $i)
-        local name=$(get_gpu_name $i)
+        local port name
+        port=$(get_gpu_port "$i")
+        name=$(get_gpu_name "$i")
         
         echo -e "${BLUE}Unloading models from GPU $i ($name)...${NC}"
         
         # Get loaded models and unload them
-        local models=$(get_models_on_gpu $i)
+        local models
+        models=$(get_models_on_gpu "$i")
         
         while IFS= read -r model; do
             if [ -n "$model" ]; then
@@ -300,12 +309,14 @@ show_status() {
     
     if [ "$FRANKEN_IS_LOCAL" = true ]; then
         for i in $(seq 0 $((FRANKEN_GPU_COUNT - 1))); do
-            local port=$(get_gpu_port $i)
-            local name=$(get_gpu_name $i)
+            local port name
+            port=$(get_gpu_port "$i")
+            name=$(get_gpu_name "$i")
             echo -e "${CYAN}GPU $i ($name):${NC}"
             
             # Check running models via ps endpoint
-            local running=$(curl -s "http://127.0.0.1:$port/api/ps" 2>/dev/null | jq -r '.models[]?.name // empty' 2>/dev/null)
+            local running
+            running=$(curl -s "http://127.0.0.1:$port/api/ps" 2>/dev/null | jq -r '.models[]?.name // empty' 2>/dev/null)
             if [ -n "$running" ]; then
                 echo "$running" | while read -r model; do
                     echo -e "  ${GREEN}● $model (loaded)${NC}"
@@ -317,11 +328,13 @@ show_status() {
         done
     else
         for i in $(seq 0 $((FRANKEN_GPU_COUNT - 1))); do
-            local port=$(get_gpu_port $i)
-            local name=$(get_gpu_name $i)
+            local port name
+            port=$(get_gpu_port "$i")
+            name=$(get_gpu_name "$i")
             echo -e "${CYAN}GPU $i ($name):${NC}"
             
-            local running=$(curl -s "http://$FRANKEN_SERVER_IP:$port/api/ps" 2>/dev/null | jq -r '.models[]?.name // empty' 2>/dev/null)
+            local running
+            running=$(curl -s "http://$FRANKEN_SERVER_IP:$port/api/ps" 2>/dev/null | jq -r '.models[]?.name // empty' 2>/dev/null)
             if [ -n "$running" ]; then
                 echo "$running" | while read -r model; do
                     echo -e "  ${GREEN}● $model (loaded)${NC}"

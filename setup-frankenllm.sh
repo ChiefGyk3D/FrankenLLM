@@ -228,7 +228,7 @@ if [ "$INSTALL_TYPE" = "local" ]; then
     # Keep sudo alive in background
     (while true; do sudo -v; sleep 50; done) &
     SUDO_KEEPALIVE_PID=$!
-    trap "kill $SUDO_KEEPALIVE_PID 2>/dev/null" EXIT
+    trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
 fi
 
 # Function to execute commands (local or remote)
