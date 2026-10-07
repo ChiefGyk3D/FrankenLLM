@@ -195,7 +195,7 @@ if prompt_yes_no "Pull models after installation?" "y"; then
         read -p "Enter model name (e.g., gemma4:12b): " MODEL_NAME
     else
         read -p "Enter model for GPU 0 (e.g., gemma4:12b): " MODEL_GPU0
-        read -p "Enter model for GPU 1 (e.g., gemma3:4b): " MODEL_GPU1
+        read -p "Enter model for GPU 1 (e.g., qwen3.5:4b): " MODEL_GPU1
     fi
 fi
 

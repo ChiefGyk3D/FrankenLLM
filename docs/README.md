@@ -259,7 +259,7 @@ FRANKEN_GPU1_NAME="RTX 3050"
 # Model Configuration
 # Specify which models to use on each GPU (gemma4 models require Ollama >= 0.33)
 FRANKEN_GPU0_MODEL="gemma4:12b"
-FRANKEN_GPU1_MODEL="gemma3:4b"
+FRANKEN_GPU1_MODEL="qwen3.5:4b"
 
 # Guard/moderation model kept resident on GPU 0 alongside the main model
 # (used for AI moderation; set empty to disable)
@@ -270,6 +270,11 @@ FRANKEN_GPU0_GUARD_MODEL="llama-guard3:8b"
 # gemma4:12b + llama-guard3:8b coexist at 8192 but not at 16384+.
 FRANKEN_GPU0_CONTEXT=8192
 FRANKEN_GPU1_CONTEXT=32768
+
+# Single GPU or small card: FRANKEN_GPU_COUNT=1, a modest FRANKEN_GPU0_CONTEXT, and
+# FRANKEN_GPU0_GUARD_MODEL= (empty) if you do not run AI moderation.
+# Optional extras, all empty by default: a second model on GPU 0, a guard on GPU 1,
+# warm-up contexts for them. See CONFIGURATION.md "Per-Model Layout and Context".
 ```
 
 Run `./configure.sh` for an interactive setup wizard that will guide you through all options.

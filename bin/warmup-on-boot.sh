@@ -46,6 +46,9 @@ fi
 log "All Ollama services ready. Starting warmup..."
 
 # Run the warmup script
-"$SCRIPT_DIR/warmup-models.sh"
+if ! "$SCRIPT_DIR/warmup-models.sh"; then
+    log "ERROR: one or more models failed to load (see output above)"
+    exit 1
+fi
 
 log "Warmup complete!"

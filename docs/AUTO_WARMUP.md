@@ -37,6 +37,22 @@ This will:
    - GPU 0 also warms `FRANKEN_GPU0_GUARD_MODEL` (default `llama-guard3:8b`)
      so the AI-moderation model is resident before the first moderation
      request arrives — set it empty to skip
+   - Optionally also `FRANKEN_GPU0_EXTRA_MODEL` on GPU 0 and
+     `FRANKEN_GPU1_GUARD_MODEL` on GPU 1 (both empty by default)
+   - Every model is loaded with `keep_alive: -1`. Main models send no `num_ctx`
+     (they run at the instance's `OLLAMA_CONTEXT_LENGTH`); the extra and guard
+     models send `options.num_ctx` only when their own `*_CONTEXT` is set, and
+     **clients must then send the same `num_ctx`** or Ollama reloads the model
+   - Requests run one after another. GPU 0 waits up to
+     `FRANKEN_GPU0_WARMUP_TIMEOUT` (default 180 s) per model and GPU 1 up to
+     `FRANKEN_GPU1_WARMUP_TIMEOUT` (default 120 s). Worst case with every
+     optional model set and every load timing out: 3 x 180 + 2 x 120 = 780 s
+     (13 minutes). Normal loads take seconds to about a minute each
+   - Failures are counted and listed in the summary, a failed model is never
+     reported as ready, and `warmup-models.sh` exits 1 if any model failed (so the
+     boot service shows as failed in `systemctl status`)
+   - `warmup-config.sh warmup` does not warm the extra or GPU 1 guard models;
+     use `warmup-models.sh` for those
 4. **System is ready** for immediate use
 
 ## Setup
@@ -104,10 +120,17 @@ Warmup can also use your `.env` configuration as fallback:
 ```bash
 # Models to load on boot
 FRANKEN_GPU0_MODEL="gemma4:12b"
-FRANKEN_GPU1_MODEL="gemma3:4b"
+FRANKEN_GPU1_MODEL="qwen3.5:4b"
 
 # Guard/moderation model warmed alongside the GPU 0 main model
 FRANKEN_GPU0_GUARD_MODEL="llama-guard3:8b"
+
+# Optional (empty by default): second model on GPU 0, guard on GPU 1,
+# and a warm-up num_ctx for them. The guard is optional: FRANKEN_GPU0_GUARD_MODEL=
+# (empty) turns it off. See CONFIGURATION.md, "Per-Model Layout and Context".
+# FRANKEN_GPU0_EXTRA_MODEL="<small-model>"
+# FRANKEN_GPU0_EXTRA_CONTEXT=8192
+# FRANKEN_GPU1_GUARD_MODEL=""
 
 # Number of GPUs
 FRANKEN_GPU_COUNT=2
@@ -274,7 +297,9 @@ This copies the necessary files and creates the service.
    - Waits for Ollama services to respond
    - Loads FRANKEN_GPU0_MODEL on GPU 0
    - Loads FRANKEN_GPU0_GUARD_MODEL on GPU 0 (if set)
+   - Loads FRANKEN_GPU0_EXTRA_MODEL on GPU 0 (if set)
    - Loads FRANKEN_GPU1_MODEL on GPU 1
+   - Loads FRANKEN_GPU1_GUARD_MODEL on GPU 1 (if set)
    - Logs completion to journal
 6. System ready for use
 ```

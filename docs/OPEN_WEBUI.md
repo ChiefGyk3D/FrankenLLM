@@ -35,7 +35,7 @@ This will:
 **Automatic Configuration (v2.0+)**: Open WebUI is now automatically configured to connect to all your GPUs. Each GPU has isolated model storage, so:
 
 - Models on GPU 0 appear as: `gemma4:12b`, etc.
-- Models on GPU 1 appear as: `gemma3:4b`, etc.
+- Models on GPU 1 appear as: `qwen3.5:4b`, etc.
 
 When you select a model in Open WebUI, it automatically uses the correct GPU based on which instance has that model.
 
@@ -45,6 +45,14 @@ When you select a model in Open WebUI, it automatically uses the correct GPU bas
 2. You should see both Ollama connections:
    - `http://host.docker.internal:11434` (GPU 0)
    - `http://host.docker.internal:11435` (GPU 1)
+
+### Match the warmed-up context
+
+Warm-up loads each model at a fixed `num_ctx` (see
+[CONFIGURATION.md](CONFIGURATION.md#per-model-layout-and-context)). If Open WebUI
+asks for a different context, Ollama reloads the model. For a model warmed at a
+non-default size, set **Advanced Params > Context Length (num_ctx)** on that model
+in Open WebUI to the same value.
 
 ### Adding Models to Specific GPUs
 

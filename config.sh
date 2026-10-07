@@ -33,11 +33,13 @@ export FRANKEN_GPU1_NAME="${FRANKEN_GPU1_NAME:-"RTX 3050"}"
 # Model configuration
 # gemma4:12b requires Ollama >= 0.33
 export FRANKEN_GPU0_MODEL="${FRANKEN_GPU0_MODEL:-gemma4:12b}"
-export FRANKEN_GPU1_MODEL="${FRANKEN_GPU1_MODEL:-gemma3:4b}"
+export FRANKEN_GPU1_MODEL="${FRANKEN_GPU1_MODEL:-qwen3.5:4b}"
 
 # Guard/moderation model kept resident on GPU 0 alongside the main model
 # (e.g. llama-guard3:8b for AI moderation). Set empty to disable warmup for it.
-export FRANKEN_GPU0_GUARD_MODEL="${FRANKEN_GPU0_GUARD_MODEL:-llama-guard3:8b}"
+# Note "-" not ":-": an explicit empty value in .env must stay empty (with ":-"
+# it silently fell back to llama-guard3:8b, so "set empty to disable" never worked).
+export FRANKEN_GPU0_GUARD_MODEL="${FRANKEN_GPU0_GUARD_MODEL-llama-guard3:8b}"
 
 # Context length per Ollama instance (OLLAMA_CONTEXT_LENGTH in the systemd units).
 # Ollama >= 0.33 defaults to 32768, which blows the KV-cache budget when two
@@ -45,6 +47,31 @@ export FRANKEN_GPU0_GUARD_MODEL="${FRANKEN_GPU0_GUARD_MODEL:-llama-guard3:8b}"
 # resident at 8192 but the guard evicts the main model at 16384+.
 export FRANKEN_GPU0_CONTEXT="${FRANKEN_GPU0_CONTEXT:-8192}"
 export FRANKEN_GPU1_CONTEXT="${FRANKEN_GPU1_CONTEXT:-32768}"
+
+# --- Optional per-model layout (all empty/unset by default = no change) -----
+# Main models (FRANKEN_GPU0_MODEL / FRANKEN_GPU1_MODEL) are warmed with no num_ctx,
+# so they run at the instance context above. A guard/extra model sends num_ctx
+# at warm-up ONLY when its own *_CONTEXT below is set (empty = none sent, it uses
+# the instance context too). Clients must send the SAME num_ctx or Ollama reloads
+# the model (see docs/CONFIGURATION.md).
+
+# Guard/moderation model on GPU 1 (e.g. llama-guard3:8b on the small card).
+# Empty = not warmed. Ignored (with a warning) when FRANKEN_GPU_COUNT=1.
+export FRANKEN_GPU1_GUARD_MODEL="${FRANKEN_GPU1_GUARD_MODEL:-}"
+
+# num_ctx sent when warming the guard models (empty = send none).
+export FRANKEN_GPU0_GUARD_CONTEXT="${FRANKEN_GPU0_GUARD_CONTEXT:-}"
+export FRANKEN_GPU1_GUARD_CONTEXT="${FRANKEN_GPU1_GUARD_CONTEXT:-}"
+
+# Optional second resident model on GPU 0 (e.g. a small cheap-task model next
+# to the backbone). Empty = not warmed. EXTRA_CONTEXT empty = send no num_ctx.
+export FRANKEN_GPU0_EXTRA_MODEL="${FRANKEN_GPU0_EXTRA_MODEL:-}"
+export FRANKEN_GPU0_EXTRA_CONTEXT="${FRANKEN_GPU0_EXTRA_CONTEXT:-}"
+
+# Warm-up request timeouts in seconds. A first load after an Ollama upgrade, or
+# at a large context, can take over a minute.
+export FRANKEN_GPU0_WARMUP_TIMEOUT="${FRANKEN_GPU0_WARMUP_TIMEOUT:-180}"
+export FRANKEN_GPU1_WARMUP_TIMEOUT="${FRANKEN_GPU1_WARMUP_TIMEOUT:-120}"
 
 # Detect if we're installing locally or remotely
 if [[ "$FRANKEN_SERVER_IP" == "localhost" || "$FRANKEN_SERVER_IP" == "127.0.0.1" ]]; then
