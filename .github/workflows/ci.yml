@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions: {}
 
@@ -12,6 +17,7 @@ jobs:
     permissions:
       contents: read
     with:
-      paths: "bin/ scripts/ remote/ :(top,glob)*.sh"
+      paths: "bin/ scripts/ remote/ local/ :(top,glob)*.sh"
+      # The repository is not shfmt-formatted yet; keep ShellCheck and tests gating.
       shfmt: false
       test-command: ./tests/test-warmup-payloads.sh

@@ -2,7 +2,14 @@ name: Security
 
 on:
   push:
+    branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions: {}
 
@@ -11,6 +18,7 @@ jobs:
     uses: ChiefGyk3D/git-your-ship-together/.github/workflows/security.yml@a5b834a6e03e0bf7187eeebfa84685498d73b139 # v1.14.0
     permissions:
       contents: read
+      id-token: write
       pull-requests: write
       security-events: write
     with:
