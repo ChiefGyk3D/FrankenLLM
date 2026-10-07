@@ -296,6 +296,40 @@ FRANKEN_GPU2_MODEL="gemma3:4b"
 2. Pull the model if missing: `./bin/pull-model.sh gemma4:12b`
 3. Check spelling matches Ollama's model name exactly
 
+### A model loads on the other instance's GPU
+
+**Problem**: Each unit pins its card with `CUDA_VISIBLE_DEVICES`, but recent
+Ollama also discovers every GPU through its Vulkan backend, and Vulkan ignores
+`CUDA_VISIBLE_DEVICES`. When the pinned card looks fuller than the other one, the
+scheduler can load a model onto the other card through Vulkan.
+
+**Check**: the device each runner picked is in the journal.
+
+```bash
+journalctl -u ollama-gpu1 | grep "using device"
+```
+
+Every line names a CUDA device (`CUDA0` inside each instance, because
+`CUDA_VISIBLE_DEVICES` renumbers), never Vulkan. A `Vulkan0` device is this
+problem.
+
+**Solution**: `FRANKEN_OLLAMA_VULKAN` controls the `OLLAMA_VULKAN` line that
+`scripts/install-ollama-native.sh` writes into each unit:
+
+| Value | Result |
+|-------|--------|
+| `auto` (default) | writes `OLLAMA_VULKAN=0` when `nvidia-smi` lists a GPU on the install target, otherwise writes nothing |
+| `0` | always write `OLLAMA_VULKAN=0` (CUDA only) |
+| `1` | always write `OLLAMA_VULKAN=1` |
+| empty | never write the line; Ollama's own default applies |
+
+AMD and Intel cards (for example Arc) may need Vulkan, so `auto` leaves it alone
+without an NVIDIA GPU. On a box that mixes NVIDIA with another vendor, `auto`
+disables Vulkan for both instances: set `FRANKEN_OLLAMA_VULKAN=1` (or empty) if the
+non-NVIDIA card needs it. Re-run `./scripts/install-ollama-native.sh`, then
+`sudo systemctl daemon-reload` and restart the instances. To apply it by hand,
+add `Environment="OLLAMA_VULKAN=0"` to each unit.
+
 ### Single GPU Not Working
 
 **Problem**: Scripts expect 2 GPUs but you only have 1
@@ -367,6 +401,9 @@ FRANKEN_GPU0_EXTRA_MODEL    # Second resident model on GPU 0
 FRANKEN_GPU0_EXTRA_CONTEXT  # num_ctx sent when warming that model (empty = send none)
 FRANKEN_GPU0_WARMUP_TIMEOUT # Seconds to wait for a GPU 0 load (default 180)
 FRANKEN_GPU1_WARMUP_TIMEOUT # Seconds to wait for a GPU 1 load (default 120)
+
+# Per-card pinning
+FRANKEN_OLLAMA_VULKAN       # auto (default) | 0 | 1 | empty - OLLAMA_VULKAN in the units
 ```
 
 ## Per-Model Layout and Context

@@ -48,6 +48,18 @@ export FRANKEN_GPU0_GUARD_MODEL="${FRANKEN_GPU0_GUARD_MODEL-llama-guard3:8b}"
 export FRANKEN_GPU0_CONTEXT="${FRANKEN_GPU0_CONTEXT:-8192}"
 export FRANKEN_GPU1_CONTEXT="${FRANKEN_GPU1_CONTEXT:-32768}"
 
+# Ollama's Vulkan backend (OLLAMA_VULKAN in the systemd units). Recent Ollama
+# discovers every GPU through Vulkan as well as CUDA, and Vulkan ignores the
+# CUDA_VISIBLE_DEVICES pin on each unit, so on an NVIDIA box an instance can load
+# a model onto the OTHER card. Values:
+#   auto   (default) writes OLLAMA_VULKAN=0 when nvidia-smi sees a GPU on the
+#          install target, otherwise writes nothing (AMD/Intel keep Vulkan)
+#   0 / 1  always write that value (use 1, or leave at the default (auto), for AMD/Intel cards)
+#   empty  never write the line; Ollama's own default applies
+# Note "-" not ":-": an explicit empty value in .env must stay empty.
+# Re-run scripts/install-ollama-native.sh to apply. See docs/CONFIGURATION.md.
+export FRANKEN_OLLAMA_VULKAN="${FRANKEN_OLLAMA_VULKAN-auto}"
+
 # --- Optional per-model layout (all empty/unset by default = no change) -----
 # Main models (FRANKEN_GPU0_MODEL / FRANKEN_GPU1_MODEL) are warmed with no num_ctx,
 # so they run at the instance context above. A guard/extra model sends num_ctx

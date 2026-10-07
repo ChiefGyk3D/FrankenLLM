@@ -186,5 +186,68 @@ check "ctx: extra model with no ctx set" "" "$(ctx 0 qwen3.5:4b FRANKEN_GPU0_EXT
 check "ctx: guard on gpu1" 4096 "$(ctx 1 llama-guard3:8b FRANKEN_GPU1_GUARD_MODEL=llama-guard3:8b FRANKEN_GPU1_GUARD_CONTEXT=4096)"
 check "ctx: unset everything" "" "$(ctx 1 whatever)"
 
+# --- 12. OLLAMA_VULKAN line in the generated systemd units -------------------
+# Runs the real install script locally with sudo/curl/nvidia-smi stubbed; units
+# land in $UNITS instead of /etc/systemd/system.
+UNITS="$WORK/units"
+mkdir -p "$WORK/scripts" "$WORK/vstub"
+cp "$REPO/scripts/install-ollama-native.sh" "$WORK/scripts/"
+cat > "$WORK/vstub/sudo" << 'STUB'
+#!/bin/bash
+echo "sudo $*" >> "$UNITS/../calls.log"
+if [ "$1" = tee ]; then cat > "$UNITS/$(basename "$2")"; else :; fi
+STUB
+printf '#!/bin/bash\necho curl >> "$UNITS/../calls.log"\nexit 0\n' > "$WORK/vstub/curl"
+printf '#!/bin/bash\necho ssh >> "$UNITS/../calls.log"\nexit 0\n' > "$WORK/vstub/ssh"
+printf '#!/bin/bash\necho "GPU 0: Test Card (UUID: GPU-0)"\n' > "$WORK/vstub/nvidia-smi"
+chmod +x "$WORK/vstub/sudo" "$WORK/vstub/curl" "$WORK/vstub/ssh" "$WORK/vstub/nvidia-smi"
+
+# gen_units <with-nvidia-smi: yes|no> [VAR=value ...]  -> RC; units in $UNITS
+gen_units() {
+    local smi="$1"; shift
+    rm -rf "$UNITS" "$WORK/calls.log"; mkdir -p "$UNITS" "$WORK/home"
+    local path="$WORK/vstub:$PATH"
+    if [ "$smi" = no ]; then
+        mkdir -p "$WORK/vstub-nosmi"
+        ln -sf "$WORK/vstub/sudo" "$WORK/vstub/curl" "$WORK/vstub/ssh" "$WORK/vstub-nosmi/"
+        printf '#!/bin/bash\nexit 9\n' > "$WORK/vstub-nosmi/nvidia-smi"
+        chmod +x "$WORK/vstub-nosmi/nvidia-smi"
+        path="$WORK/vstub-nosmi:$PATH"
+    fi
+    env -i PATH="$path" HOME="$WORK/home" USER=tester UNITS="$UNITS" \
+        FRANKEN_SERVER_IP=localhost "$@" bash "$WORK/scripts/install-ollama-native.sh" > "$WORK/stdout" 2>"$WORK/stderr"
+    RC=$?
+}
+vulkan_lines() { grep -h '^Environment="OLLAMA_VULKAN=' "$UNITS"/ollama-gpu0.service "$UNITS"/ollama-gpu1.service 2> /dev/null | tr '\n' ' '; }
+
+gen_units yes FRANKEN_OLLAMA_VULKAN=0
+check "vulkan=0: install ok" 0 "$RC"
+check "vulkan=0: line in both units" 'Environment="OLLAMA_VULKAN=0" Environment="OLLAMA_VULKAN=0" ' "$(vulkan_lines)"
+check "vulkan=0: pin kept" 1 "$(grep -c '^Environment="CUDA_VISIBLE_DEVICES=1"' "$UNITS/ollama-gpu1.service")"
+
+gen_units no FRANKEN_OLLAMA_VULKAN=1
+check "vulkan=1: line in both units" 'Environment="OLLAMA_VULKAN=1" Environment="OLLAMA_VULKAN=1" ' "$(vulkan_lines)"
+
+gen_units yes FRANKEN_OLLAMA_VULKAN=
+check "vulkan empty: install ok" 0 "$RC"
+check "vulkan empty: line omitted" "" "$(vulkan_lines)"
+
+gen_units yes FRANKEN_OLLAMA_VULKAN=auto
+check "vulkan auto + NVIDIA: 0 written" 'Environment="OLLAMA_VULKAN=0" Environment="OLLAMA_VULKAN=0" ' "$(vulkan_lines)"
+gen_units yes
+check "vulkan default (unset in env) + NVIDIA: 0 written" 'Environment="OLLAMA_VULKAN=0" Environment="OLLAMA_VULKAN=0" ' "$(vulkan_lines)"
+
+gen_units no FRANKEN_OLLAMA_VULKAN=auto
+check "vulkan auto, no NVIDIA: line omitted" "" "$(vulkan_lines)"
+
+gen_units yes FRANKEN_OLLAMA_VULKAN=bogus
+check "vulkan invalid: install fails" 1 "$RC"
+check "vulkan invalid: no sudo/curl/ssh calls (local)" "no" "$([ -s "$WORK/calls.log" ] && echo yes || echo no)"
+check "vulkan invalid: no units written" 0 "$(find "$UNITS" -type f | wc -l)"
+check "vulkan invalid: no completion banner" 0 "$(bash -c 'cat "$0"' "$WORK/stdout" | grep -c 'Installation Complete')"
+gen_units yes FRANKEN_SERVER_IP=remote-host FRANKEN_OLLAMA_VULKAN=bogus
+check "vulkan invalid (remote path): fails" 1 "$RC"
+check "vulkan invalid (remote path): no ssh/sudo calls" "no" "$([ -s "$WORK/calls.log" ] && echo yes || echo no)"
+
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

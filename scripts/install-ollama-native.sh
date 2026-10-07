@@ -5,6 +5,17 @@
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
+
+# Fail fast, before any install step or ssh: a bad value must not leave a
+# half-installed machine behind.
+case "$FRANKEN_OLLAMA_VULKAN" in
+    auto|0|1|"") ;;
+    *)
+        echo "ERROR: FRANKEN_OLLAMA_VULKAN must be auto, 0, 1 or empty (got '$FRANKEN_OLLAMA_VULKAN')" >&2
+        exit 1
+        ;;
+esac
+
 echo "=== FrankenLLM: Installing Ollama (Native) on $FRANKEN_SERVER_IP ==="
 echo ""
 
@@ -25,6 +36,32 @@ sudo systemctl mask ollama.service 2>/dev/null || true
 mkdir -p "$HOME/.ollama/models-gpu0"
 mkdir -p "$HOME/.ollama/models-gpu1"
 
+# OLLAMA_VULKAN line for the units (see FRANKEN_OLLAMA_VULKAN in config.sh).
+# Recent Ollama also finds GPUs through Vulkan, which ignores CUDA_VISIBLE_DEVICES,
+# so on NVIDIA an instance can load models onto the other card.
+#   auto   -> 0 when nvidia-smi lists a GPU on this machine, else leave Ollama's default
+#   0 / 1  -> write exactly that
+#   (empty) -> write nothing
+case "$FRANKEN_OLLAMA_VULKAN" in
+    auto)
+        if command -v nvidia-smi > /dev/null 2>&1 && nvidia-smi -L 2> /dev/null | grep -q '^GPU '; then
+            VULKAN_VALUE=0
+        else
+            VULKAN_VALUE=""
+        fi
+        ;;
+    0|1|"") VULKAN_VALUE="$FRANKEN_OLLAMA_VULKAN" ;;
+    *)
+        echo "ERROR: FRANKEN_OLLAMA_VULKAN must be auto, 0, 1 or empty (got '$FRANKEN_OLLAMA_VULKAN')" >&2
+        exit 1
+        ;;
+esac
+if [ -n "$VULKAN_VALUE" ]; then
+    VULKAN_LINE="Environment=\"OLLAMA_VULKAN=$VULKAN_VALUE\""
+else
+    VULKAN_LINE="# OLLAMA_VULKAN not set: Ollama's default applies"
+fi
+
 # Create systemd service for GPU 0
 sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null << EOF
 [Unit]
@@ -35,6 +72,7 @@ After=network-online.target
 Type=simple
 User=$USER
 Environment="CUDA_VISIBLE_DEVICES=0"
+$VULKAN_LINE
 Environment="OLLAMA_HOST=0.0.0.0:$FRANKEN_GPU0_PORT"
 Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu0"
 Environment="OLLAMA_KEEP_ALIVE=-1"
@@ -57,6 +95,7 @@ After=network-online.target
 Type=simple
 User=$USER
 Environment="CUDA_VISIBLE_DEVICES=1"
+$VULKAN_LINE
 Environment="OLLAMA_HOST=0.0.0.0:$FRANKEN_GPU1_PORT"
 Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu1"
 Environment="OLLAMA_KEEP_ALIVE=-1"
@@ -92,7 +131,7 @@ else
     echo "Installing on remote server $FRANKEN_SERVER_IP..."
     echo "NOTE: You will be prompted for your sudo password on the remote server."
     echo ""
-    ssh -t "$FRANKEN_SERVER_IP" "FRANKEN_GPU0_PORT=$FRANKEN_GPU0_PORT FRANKEN_GPU1_PORT=$FRANKEN_GPU1_PORT FRANKEN_GPU0_NAME='$FRANKEN_GPU0_NAME' FRANKEN_GPU1_NAME='$FRANKEN_GPU1_NAME' FRANKEN_GPU0_CONTEXT=$FRANKEN_GPU0_CONTEXT FRANKEN_GPU1_CONTEXT=$FRANKEN_GPU1_CONTEXT bash -s" << EOF
+    ssh -t "$FRANKEN_SERVER_IP" "FRANKEN_GPU0_PORT=$FRANKEN_GPU0_PORT FRANKEN_GPU1_PORT=$FRANKEN_GPU1_PORT FRANKEN_GPU0_NAME='$FRANKEN_GPU0_NAME' FRANKEN_GPU1_NAME='$FRANKEN_GPU1_NAME' FRANKEN_GPU0_CONTEXT=$FRANKEN_GPU0_CONTEXT FRANKEN_GPU1_CONTEXT=$FRANKEN_GPU1_CONTEXT FRANKEN_OLLAMA_VULKAN='$FRANKEN_OLLAMA_VULKAN' bash -s" << EOF
 $INSTALL_SCRIPT
 EOF
 fi

@@ -153,6 +153,15 @@ This means:
 - No more confusion about which GPU runs which model
 - Use `./bin/add-model.sh` to manage models per GPU
 
+Each unit is pinned to its card with `CUDA_VISIBLE_DEVICES`. Ollama's Vulkan
+backend ignores that pin and can load a model onto the other instance's card, so
+the installer also writes `OLLAMA_VULKAN=0` on NVIDIA machines
+(`FRANKEN_OLLAMA_VULKAN`, see
+[CONFIGURATION.md](CONFIGURATION.md#a-model-loads-on-the-other-instances-gpu)).
+Check where models landed with
+`journalctl -u ollama-gpu1 | grep "using device"`: each instance should show only
+its own card.
+
 ## Verifying Warmup
 
 ### Check Service Status
