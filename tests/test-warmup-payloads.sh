@@ -194,26 +194,28 @@ mkdir -p "$WORK/scripts" "$WORK/vstub"
 cp "$REPO/scripts/install-ollama-native.sh" "$WORK/scripts/"
 cat > "$WORK/vstub/sudo" << 'STUB'
 #!/bin/bash
+echo "sudo $*" >> "$UNITS/../calls.log"
 if [ "$1" = tee ]; then cat > "$UNITS/$(basename "$2")"; else :; fi
 STUB
-printf '#!/bin/bash\nexit 0\n' > "$WORK/vstub/curl"
+printf '#!/bin/bash\necho curl >> "$UNITS/../calls.log"\nexit 0\n' > "$WORK/vstub/curl"
+printf '#!/bin/bash\necho ssh >> "$UNITS/../calls.log"\nexit 0\n' > "$WORK/vstub/ssh"
 printf '#!/bin/bash\necho "GPU 0: Test Card (UUID: GPU-0)"\n' > "$WORK/vstub/nvidia-smi"
-chmod +x "$WORK/vstub/sudo" "$WORK/vstub/curl" "$WORK/vstub/nvidia-smi"
+chmod +x "$WORK/vstub/sudo" "$WORK/vstub/curl" "$WORK/vstub/ssh" "$WORK/vstub/nvidia-smi"
 
 # gen_units <with-nvidia-smi: yes|no> [VAR=value ...]  -> RC; units in $UNITS
 gen_units() {
     local smi="$1"; shift
-    rm -rf "$UNITS"; mkdir -p "$UNITS" "$WORK/home"
+    rm -rf "$UNITS" "$WORK/calls.log"; mkdir -p "$UNITS" "$WORK/home"
     local path="$WORK/vstub:$PATH"
     if [ "$smi" = no ]; then
         mkdir -p "$WORK/vstub-nosmi"
-        ln -sf "$WORK/vstub/sudo" "$WORK/vstub/curl" "$WORK/vstub-nosmi/"
+        ln -sf "$WORK/vstub/sudo" "$WORK/vstub/curl" "$WORK/vstub/ssh" "$WORK/vstub-nosmi/"
         printf '#!/bin/bash\nexit 9\n' > "$WORK/vstub-nosmi/nvidia-smi"
         chmod +x "$WORK/vstub-nosmi/nvidia-smi"
         path="$WORK/vstub-nosmi:$PATH"
     fi
     env -i PATH="$path" HOME="$WORK/home" USER=tester UNITS="$UNITS" \
-        FRANKEN_SERVER_IP=localhost "$@" bash "$WORK/scripts/install-ollama-native.sh" > /dev/null 2>"$WORK/stderr"
+        FRANKEN_SERVER_IP=localhost "$@" bash "$WORK/scripts/install-ollama-native.sh" > "$WORK/stdout" 2>"$WORK/stderr"
     RC=$?
 }
 vulkan_lines() { grep -h '^Environment="OLLAMA_VULKAN=' "$UNITS"/ollama-gpu0.service "$UNITS"/ollama-gpu1.service 2> /dev/null | tr '\n' ' '; }
@@ -240,6 +242,12 @@ check "vulkan auto, no NVIDIA: line omitted" "" "$(vulkan_lines)"
 
 gen_units yes FRANKEN_OLLAMA_VULKAN=bogus
 check "vulkan invalid: install fails" 1 "$RC"
+check "vulkan invalid: no sudo/curl/ssh calls (local)" "no" "$([ -s "$WORK/calls.log" ] && echo yes || echo no)"
+check "vulkan invalid: no units written" 0 "$(find "$UNITS" -type f | wc -l)"
+check "vulkan invalid: no completion banner" 0 "$(bash -c 'cat "$0"' "$WORK/stdout" | grep -c 'Installation Complete')"
+gen_units yes FRANKEN_SERVER_IP=remote-host FRANKEN_OLLAMA_VULKAN=bogus
+check "vulkan invalid (remote path): fails" 1 "$RC"
+check "vulkan invalid (remote path): no ssh/sudo calls" "no" "$([ -s "$WORK/calls.log" ] && echo yes || echo no)"
 
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

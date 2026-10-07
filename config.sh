@@ -54,7 +54,7 @@ export FRANKEN_GPU1_CONTEXT="${FRANKEN_GPU1_CONTEXT:-32768}"
 # a model onto the OTHER card. Values:
 #   auto   (default) writes OLLAMA_VULKAN=0 when nvidia-smi sees a GPU on the
 #          install target, otherwise writes nothing (AMD/Intel keep Vulkan)
-#   0 / 1  always write that value (use 1 or leave unset for AMD/Intel cards)
+#   0 / 1  always write that value (use 1, or leave at the default (auto), for AMD/Intel cards)
 #   empty  never write the line; Ollama's own default applies
 # Note "-" not ":-": an explicit empty value in .env must stay empty.
 # Re-run scripts/install-ollama-native.sh to apply. See docs/CONFIGURATION.md.

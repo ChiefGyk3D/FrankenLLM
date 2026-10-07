@@ -301,8 +301,7 @@ FRANKEN_GPU2_MODEL="gemma3:4b"
 **Problem**: Each unit pins its card with `CUDA_VISIBLE_DEVICES`, but recent
 Ollama also discovers every GPU through its Vulkan backend, and Vulkan ignores
 `CUDA_VISIBLE_DEVICES`. When the pinned card looks fuller than the other one, the
-scheduler can load a model onto the other card. Seen on Ollama 0.33.2 with two
-NVIDIA cards: the GPU 1 instance put its guard model on the GPU 0 card.
+scheduler can load a model onto the other card through Vulkan.
 
 **Check**: the device each runner picked is in the journal.
 
@@ -310,8 +309,9 @@ NVIDIA cards: the GPU 1 instance put its guard model on the GPU 0 card.
 journalctl -u ollama-gpu1 | grep "using device"
 ```
 
-Every line should name that instance's own card, with a CUDA device (for example
-`CUDA1`). A `Vulkan0` device naming the other card is this problem.
+Every line names a CUDA device (`CUDA0` inside each instance, because
+`CUDA_VISIBLE_DEVICES` renumbers), never Vulkan. A `Vulkan0` device is this
+problem.
 
 **Solution**: `FRANKEN_OLLAMA_VULKAN` controls the `OLLAMA_VULKAN` line that
 `scripts/install-ollama-native.sh` writes into each unit:

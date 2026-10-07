@@ -5,6 +5,17 @@
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
+
+# Fail fast, before any install step or ssh: a bad value must not leave a
+# half-installed machine behind.
+case "$FRANKEN_OLLAMA_VULKAN" in
+    auto|0|1|"") ;;
+    *)
+        echo "ERROR: FRANKEN_OLLAMA_VULKAN must be auto, 0, 1 or empty (got '$FRANKEN_OLLAMA_VULKAN')" >&2
+        exit 1
+        ;;
+esac
+
 echo "=== FrankenLLM: Installing Ollama (Native) on $FRANKEN_SERVER_IP ==="
 echo ""
 
