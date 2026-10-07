@@ -165,7 +165,7 @@ Model selection:
   2) Different models per GPU
 Select [1-2]: 2
 
-Enter model for GPU 0 (e.g., gemma3:12b): gemma3:12b
+Enter model for GPU 0 (e.g., gemma4:12b): gemma4:12b
 Enter model for GPU 1 (e.g., gemma3:4b): gemma3:4b
 
 ✓ Configuration saved to .env

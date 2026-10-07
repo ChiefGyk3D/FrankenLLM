@@ -38,6 +38,7 @@ Environment="CUDA_VISIBLE_DEVICES=0"
 Environment="OLLAMA_HOST=0.0.0.0:$FRANKEN_GPU0_PORT"
 Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu0"
 Environment="OLLAMA_KEEP_ALIVE=-1"
+Environment="OLLAMA_CONTEXT_LENGTH=$FRANKEN_GPU0_CONTEXT"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3
@@ -59,6 +60,7 @@ Environment="CUDA_VISIBLE_DEVICES=1"
 Environment="OLLAMA_HOST=0.0.0.0:$FRANKEN_GPU1_PORT"
 Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu1"
 Environment="OLLAMA_KEEP_ALIVE=-1"
+Environment="OLLAMA_CONTEXT_LENGTH=$FRANKEN_GPU1_CONTEXT"
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3
@@ -90,7 +92,7 @@ else
     echo "Installing on remote server $FRANKEN_SERVER_IP..."
     echo "NOTE: You will be prompted for your sudo password on the remote server."
     echo ""
-    ssh -t "$FRANKEN_SERVER_IP" "FRANKEN_GPU0_PORT=$FRANKEN_GPU0_PORT FRANKEN_GPU1_PORT=$FRANKEN_GPU1_PORT FRANKEN_GPU0_NAME='$FRANKEN_GPU0_NAME' FRANKEN_GPU1_NAME='$FRANKEN_GPU1_NAME' bash -s" << EOF
+    ssh -t "$FRANKEN_SERVER_IP" "FRANKEN_GPU0_PORT=$FRANKEN_GPU0_PORT FRANKEN_GPU1_PORT=$FRANKEN_GPU1_PORT FRANKEN_GPU0_NAME='$FRANKEN_GPU0_NAME' FRANKEN_GPU1_NAME='$FRANKEN_GPU1_NAME' FRANKEN_GPU0_CONTEXT=$FRANKEN_GPU0_CONTEXT FRANKEN_GPU1_CONTEXT=$FRANKEN_GPU1_CONTEXT bash -s" << EOF
 $INSTALL_SCRIPT
 EOF
 fi

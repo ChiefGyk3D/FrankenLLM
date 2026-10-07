@@ -10,7 +10,7 @@
 ./install.sh
 
 # 3. Pull models to specific GPUs
-./bin/add-model.sh 0 gemma3:12b   # Add 12b to GPU 0
+./bin/add-model.sh 0 gemma4:12b   # Add 12b to GPU 0
 ./bin/add-model.sh 1 gemma3:4b    # Add 4b to GPU 1
 
 # 4. Test
@@ -55,7 +55,7 @@
 # GPU 0 (Port 11434)
 curl http://YOUR_IP:11434/api/tags
 curl http://YOUR_IP:11434/api/generate -d '{
-  "model": "gemma3:12b",
+  "model": "gemma4:12b",
   "prompt": "Hello!",
   "stream": false
 }'
@@ -71,9 +71,13 @@ curl http://YOUR_IP:11435/api/generate -d '{
 
 ## 📦 Recommended Models
 
-**16GB GPU:** `gemma3:12b`, `gemma2:9b`, `llama3.2`, `mistral:7b-instruct`
+**16GB GPU:** `gemma4:12b` (Ollama >= 0.33), `gemma3:12b`, `gemma2:9b`, `llama3.2`, `mistral:7b-instruct`
 
-**8GB GPU:** `gemma3:4b`, `gemma3:1b`, `gemma2:2b`, `llama3.2:3b`, `phi3:3.8b`
+**16GB GPU + AI moderation:** `gemma4:12b` + `llama-guard3:8b` both stay resident at 8192 context (`FRANKEN_GPU0_CONTEXT=8192`)
+
+**One GPU / small card:** set `FRANKEN_GPU_COUNT=1`, a modest `FRANKEN_GPU0_CONTEXT`, and `FRANKEN_GPU0_GUARD_MODEL=` (empty) if you do not run AI moderation; see [CONFIGURATION.md](CONFIGURATION.md#single-gpu--small-card-start-here). An optional 16GB + 8GB split layout is also described there.
+
+**8GB GPU:** `qwen3.5:4b` (default for GPU 1; it thinks by default, so send `think: false` for cheap tasks), `gemma3:4b`, `gemma3:1b`, `gemma2:2b`, `llama3.2:3b`, `phi3:3.8b`
 
 ## 🆘 Troubleshooting
 

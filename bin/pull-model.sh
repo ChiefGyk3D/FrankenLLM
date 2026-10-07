@@ -13,7 +13,7 @@ if [ -z "$MODEL_NAME" ]; then
     echo "Usage: $0 <model-name>"
     echo ""
     echo "Examples:"
-    echo "  $0 gemma3:12b"
+    echo "  $0 gemma4:12b"
     echo "  $0 gemma2:9b"
     echo "  $0 llama3.2"
     exit 1

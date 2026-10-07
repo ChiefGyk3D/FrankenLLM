@@ -5,6 +5,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
+source "$SCRIPT_DIR/warmup-lib.sh"
 
 # Warmup config file location
 if [ "$FRANKEN_IS_LOCAL" = true ]; then
@@ -190,13 +191,11 @@ do_warmup() {
             if [ -n "$model" ]; then
                 echo -e "${BLUE}Loading $model on GPU $i ($name)...${NC}"
                 
-                if [ "$FRANKEN_IS_LOCAL" = true ]; then
-                    curl -s "http://127.0.0.1:$port/api/generate" \
-                        -d "{\"model\": \"$model\", \"prompt\": \"warmup\", \"stream\": false}" > /dev/null 2>&1
-                else
-                    curl -s "http://$FRANKEN_SERVER_IP:$port/api/generate" \
-                        -d "{\"model\": \"$model\", \"prompt\": \"warmup\", \"stream\": false}" > /dev/null 2>&1
-                fi
+                # Same request as warmup-models.sh (keep_alive -1, no num_ctx for main models); see warmup-lib.sh
+                local host="$FRANKEN_SERVER_IP"
+                [ "$FRANKEN_IS_LOCAL" = true ] && host="127.0.0.1"
+                franken_warmup_load "$host" "$port" "$model" \
+                    "$(franken_ctx_for_model "$i" "$model")" 180 > /dev/null 2>&1
                 
                 if [ $? -eq 0 ]; then
                     echo -e "${GREEN}✓ $model loaded on GPU $i${NC}"
@@ -214,13 +213,11 @@ do_warmup() {
             if [ -n "$model" ]; then
                 echo -e "${BLUE}Loading $model on GPU $i ($name)...${NC}"
                 
-                if [ "$FRANKEN_IS_LOCAL" = true ]; then
-                    curl -s "http://127.0.0.1:$port/api/generate" \
-                        -d "{\"model\": \"$model\", \"prompt\": \"warmup\", \"stream\": false}" > /dev/null 2>&1
-                else
-                    curl -s "http://$FRANKEN_SERVER_IP:$port/api/generate" \
-                        -d "{\"model\": \"$model\", \"prompt\": \"warmup\", \"stream\": false}" > /dev/null 2>&1
-                fi
+                # Same request as warmup-models.sh (keep_alive -1, no num_ctx for main models); see warmup-lib.sh
+                local host="$FRANKEN_SERVER_IP"
+                [ "$FRANKEN_IS_LOCAL" = true ] && host="127.0.0.1"
+                franken_warmup_load "$host" "$port" "$model" \
+                    "$(franken_ctx_for_model "$i" "$model")" 180 > /dev/null 2>&1
                 
                 if [ $? -eq 0 ]; then
                     echo -e "${GREEN}✓ $model loaded on GPU $i${NC}"

@@ -209,7 +209,7 @@ These tools in `bin/` help manage your installation:
 
 ```bash
 # Add models to specific GPUs
-./bin/add-model.sh 0 gemma3:12b    # Add to GPU 0
+./bin/add-model.sh 0 gemma4:12b    # Add to GPU 0
 ./bin/add-model.sh 1 gemma3:4b     # Add to GPU 1
 ./bin/add-model.sh list            # Show all models
 

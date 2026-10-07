@@ -208,7 +208,7 @@ echo "╚═══════════════════════�
 echo ""
 echo "Next steps:"
 echo "  1. Test connection: ./bin/health-check.sh"
-echo "  2. Pull models: ./bin/pull-dual-models.sh gemma3:12b gemma3:4b"
+echo "  2. Pull models: ./bin/pull-dual-models.sh gemma4:12b gemma3:4b"
 echo "  3. Setup auto-warmup: ./remote/setup-warmup.sh"
 echo "  4. Test LLMs: ./bin/test-llm.sh"
 echo ""

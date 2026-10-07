@@ -44,6 +44,7 @@ scp "$SCRIPT_DIR/../config.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/config.sh"
 
 echo "Copying warmup scripts..."
 scp "$SCRIPT_DIR/../bin/warmup-models.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
+scp "$SCRIPT_DIR/../bin/warmup-lib.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
 scp "$SCRIPT_DIR/../bin/warmup-on-boot.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
 
 echo "Making scripts executable..."

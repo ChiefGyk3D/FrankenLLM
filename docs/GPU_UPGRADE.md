@@ -79,7 +79,7 @@ If the new GPU has more VRAM, you might want different models:
 
 ```bash
 # Pull a larger model for the upgraded GPU
-./bin/add-model.sh 1 gemma3:12b
+./bin/add-model.sh 1 gemma4:12b
 
 # Or interactively
 ./bin/add-model.sh
@@ -171,7 +171,7 @@ sudo systemctl start ollama-gpu2
 
 ```bash
 # Add models to GPU 2
-OLLAMA_HOST=127.0.0.1:11436 ollama pull gemma3:12b
+OLLAMA_HOST=127.0.0.1:11436 ollama pull gemma4:12b
 ```
 
 ### Step 6: Update Open WebUI (if installed)

@@ -15,7 +15,7 @@
 To pre-load your preferred models into GPU memory after restart:
 
 ```bash
-./bin/warmup-models.sh gemma3:12b gemma3:4b
+./bin/warmup-models.sh gemma4:12b gemma3:4b
 ```
 
 This makes a small request to each GPU to load the models, so they're ready for use.
@@ -71,7 +71,7 @@ sudo journalctl -u ollama-gpu1 -n 50
 ```bash
 # GPU 0 (16GB) - Use 12B model
 curl http://192.168.201.145:11434/api/generate -d '{
-  "model": "gemma3:12b",
+  "model": "gemma4:12b",
   "prompt": "Your question"
 }'
 
@@ -88,7 +88,7 @@ Add to your workflow:
 
 ```bash
 # After system restart or service restart
-./bin/warmup-models.sh gemma3:12b gemma3:4b
+./bin/warmup-models.sh gemma4:12b gemma3:4b
 ```
 
 ### Method 3: Create a Startup Script
@@ -108,7 +108,7 @@ Add this content:
 sleep 10
 
 # Warm up GPU 0 with 12B
-curl -s http://localhost:11434/api/generate -d '{"model": "gemma3:12b", "prompt": "Hi", "stream": false}' > /dev/null
+curl -s http://localhost:11434/api/generate -d '{"model": "gemma4:12b", "prompt": "Hi", "stream": false}' > /dev/null
 
 # Warm up GPU 1 with 4B
 curl -s http://localhost:11435/api/generate -d '{"model": "gemma3:4b", "prompt": "Hi", "stream": false}' > /dev/null
@@ -157,7 +157,7 @@ VS Code's integrated terminal doesn't allocate a proper PTY (pseudo-terminal), w
 ./bin/health-check.sh
 
 # Warm up models after restart
-./bin/warmup-models.sh gemma3:12b gemma3:4b
+./bin/warmup-models.sh gemma4:12b gemma3:4b
 
 # Test with correct models
 ./bin/test-llm.sh
@@ -183,12 +183,12 @@ nvidia-smi
 | Task | Command |
 |------|---------|
 | **Check Health** | `./bin/health-check.sh` |
-| **Warm Up Models** | `./bin/warmup-models.sh gemma3:12b gemma3:4b` |
+| **Warm Up Models** | `./bin/warmup-models.sh gemma4:12b gemma3:4b` |
 | **Test Both** | `./bin/test-llm.sh` |
 | **Restart Services** | `./remote/service-control.sh restart` (external terminal) |
 | **View Logs** | `./remote/service-control.sh logs` (external terminal) |
 | **SSH In** | `ssh 192.168.201.145` |
-| **Add Model to GPU** | `./bin/add-model.sh 0 gemma3:12b` |
+| **Add Model to GPU** | `./bin/add-model.sh 0 gemma4:12b` |
 | **Configure Warmup** | `./bin/warmup-config.sh set` |
 | **Check for Updates** | `./update.sh check` |
 | **Update All** | `./update.sh all` |
@@ -222,7 +222,7 @@ Each GPU has its own isolated model storage directory. This ensures:
 
 ```bash
 # Add a model to a specific GPU
-./bin/add-model.sh 0 gemma3:12b    # GPU 0 (larger models)
+./bin/add-model.sh 0 gemma4:12b    # GPU 0 (larger models)
 ./bin/add-model.sh 1 gemma3:4b     # GPU 1 (smaller models)
 
 # Interactive mode
