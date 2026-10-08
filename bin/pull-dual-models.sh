@@ -70,6 +70,7 @@ echo ""
 # Pull models on each GPU
 for i in $(seq 0 $(($FRANKEN_GPU_COUNT - 1))); do
     model="${!i}"  # Get the argument at position $i (note: args are 1-indexed, we adjust below)
+    # shellcheck disable=SC2124  # the length-1 positional slice selects exactly one model
     model="${@:$(($i + 1)):1}"  # Correct way to get positional argument
     
     gpu_name_var="FRANKEN_GPU${i}_NAME"
@@ -90,6 +91,7 @@ done
 
 echo "✅ All models pulled successfully!"
 for i in $(seq 0 $(($FRANKEN_GPU_COUNT - 1))); do
+    # shellcheck disable=SC2124  # the length-1 positional slice selects exactly one model
     model="${@:$(($i + 1)):1}"
     gpu_name_var="FRANKEN_GPU${i}_NAME"
     gpu_name="${!gpu_name_var:-GPU $i}"

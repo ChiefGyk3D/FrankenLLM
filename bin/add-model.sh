@@ -59,8 +59,9 @@ get_gpu_name() {
 
 list_models_on_gpu() {
     local gpu=$1
-    local port=$(get_gpu_port $gpu)
-    local name=$(get_gpu_name $gpu)
+    local port name
+    port=$(get_gpu_port "$gpu")
+    name=$(get_gpu_name "$gpu")
     
     echo -e "${CYAN}GPU $gpu ($name) - Port $port:${NC}"
     if [ "$FRANKEN_IS_LOCAL" = true ]; then
@@ -74,8 +75,9 @@ list_models_on_gpu() {
 pull_model_to_gpu() {
     local gpu=$1
     local model=$2
-    local port=$(get_gpu_port $gpu)
-    local name=$(get_gpu_name $gpu)
+    local port name
+    port=$(get_gpu_port "$gpu")
+    name=$(get_gpu_name "$gpu")
     
     echo -e "${BLUE}📥 Pulling $model to GPU $gpu ($name)...${NC}"
     echo ""
@@ -100,8 +102,9 @@ pull_model_to_gpu() {
 remove_model_from_gpu() {
     local gpu=$1
     local model=$2
-    local port=$(get_gpu_port $gpu)
-    local name=$(get_gpu_name $gpu)
+    local port name
+    port=$(get_gpu_port "$gpu")
+    name=$(get_gpu_name "$gpu")
     
     echo -e "${YELLOW}🗑️  Removing $model from GPU $gpu ($name)...${NC}"
     

@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/bash-ci.yml@804400181a9d3e2f78dfcda5161e2bd960bc011a # v1.15.0
+    permissions:
+      contents: read
+    with:
+      paths: "bin/ scripts/ remote/ local/ :(top,glob)*.sh"
+      # The repository is not shfmt-formatted yet; keep ShellCheck and tests gating.
+      shfmt: false
+      test-command: ./tests/test-warmup-payloads.sh

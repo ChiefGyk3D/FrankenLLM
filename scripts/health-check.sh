@@ -260,7 +260,6 @@ check_system_resources() {
     for PATH_CHECK in "/usr/share/ollama" "$HOME/.ollama" "/var/lib/ollama"; do
         if [ -d "$PATH_CHECK" ]; then
             DISK_INFO=$(df -BG "$PATH_CHECK" 2>/dev/null | tail -1)
-            DISK_USED=$(echo $DISK_INFO | awk '{print $3}' | tr -d 'G')
             DISK_AVAIL=$(echo $DISK_INFO | awk '{print $4}' | tr -d 'G')
             DISK_PERCENT=$(echo $DISK_INFO | awk '{print $5}' | tr -d '%')
             

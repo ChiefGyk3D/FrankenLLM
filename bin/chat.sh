@@ -99,7 +99,7 @@ fi
 
 echo ""
 echo "Loading models from GPU $SELECTED_GPU ($SELECTED_NAME)..."
-MODELS=($(get_models "$SELECTED_PORT"))
+mapfile -t MODELS < <(get_models "$SELECTED_PORT")
 
 if [ ${#MODELS[@]} -eq 0 ]; then
     echo "❌ No models found on this GPU"

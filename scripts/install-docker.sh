@@ -57,9 +57,7 @@ if [ "$FRANKEN_IS_LOCAL" = true ]; then
     eval "$DOCKER_INSTALL_SCRIPT"
 else
     echo "Installing Docker on remote server $FRANKEN_SERVER_IP..."
-    ssh "$FRANKEN_SERVER_IP" 'bash -s' << EOF
-$DOCKER_INSTALL_SCRIPT
-EOF
+    printf '%s\n' "$DOCKER_INSTALL_SCRIPT" | ssh "$FRANKEN_SERVER_IP" 'bash -s'
 fi
 
 echo ""
