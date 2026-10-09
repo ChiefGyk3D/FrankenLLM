@@ -13,7 +13,7 @@ permissions: {}
 
 jobs:
   ci:
-    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/bash-ci.yml@804400181a9d3e2f78dfcda5161e2bd960bc011a # v1.15.0
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/bash-ci.yml@cc7fa6f48a612183ecd900ed15810da61b30288a # v1.17.0
     permissions:
       contents: read
     with:
