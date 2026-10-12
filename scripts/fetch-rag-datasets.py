@@ -1296,8 +1296,8 @@ def fetch_cdc_diseases(output_dir: Path):
         # Extract main content — look for article body or main content div
         # Strip HTML to plain text
         # Remove script/style blocks first
-        text = re.sub(r'<script[^>]*>.*?</script>', '', page_html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<script[^>]*>.*?</script\s*>', '', page_html, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<style[^>]*>.*?</style\s*>', '', text, flags=re.DOTALL | re.IGNORECASE)
         # Try to find main content area
         main_match = re.search(r'<main[^>]*>(.*?)</main>', text, re.DOTALL)
         if main_match:
@@ -1742,8 +1742,8 @@ def fetch_proxmox_docs(output_dir: Path):
 
         text = content_match.group(1)
         # Clean HTML
-        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<script[^>]*>.*?</script\s*>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<style[^>]*>.*?</style\s*>', '', text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'<[^>]+>', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
 
