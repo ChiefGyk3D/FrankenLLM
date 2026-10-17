@@ -41,6 +41,10 @@ Each channel turns on when its variables are set. Use as many as you like.
 
 Email uses Python's standard-library SMTP client, so the box does not need `sendmail` or any mail agent. Secrets are given to `curl` through a config file descriptor and never appear in `ps`.
 
+## Privileges
+
+The watchdog needs no root, so it does not have one. The installer puts the scripts in `/usr/local/lib/frankenllm` (owned by root) and the unit runs them as a systemd dynamic user with a private state directory. It never reads `config.sh`, a `.env`, or anything else from the FrankenLLM checkout, so write access to the checkout or `/opt/frankenllm` cannot be turned into code running as root. The env file is read by systemd before privileges drop and stays `root:root 0600`. Ports come from `WATCHDOG_PORTS` in that env file.
+
 ## Install
 
 ```bash
@@ -68,7 +72,7 @@ The hold is what prevents the drift. The watchdog is what tells you if something
 | Variable | Default | |
 |---|---|---|
 | `WATCHDOG_LABEL` | `FrankenLLM` | Name shown in alerts |
-| `WATCHDOG_PORTS` | from `FRANKEN_GPU*_PORT`, else `11434 11435` | Ollama ports to check |
+| `WATCHDOG_PORTS` | `11434 11435` | Ollama ports to check |
 | `WATCHDOG_HOST` | `127.0.0.1` | Where Ollama listens |
 | `WATCHDOG_REPEAT_HOURS` | `24` | Reminder interval |
 | `WATCHDOG_REBOOT_GRACE_HOURS` | `72` | How long a pending reboot is tolerated |
@@ -80,7 +84,7 @@ The hold is what prevents the drift. The watchdog is what tells you if something
 scripts/watchdog.sh --print   # run the checks, print problems, touch nothing
 ```
 
-State lives in `/var/lib/frankenllm/watchdog`, one small file per active problem.
+State lives in `/var/lib/frankenllm-watchdog`, one small file per active problem.
 
 ## Tests
 

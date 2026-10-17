@@ -105,8 +105,8 @@ run_wd() {
 }
 
 rc() { cat "$WORK/rc"; }
-state_count() { find "$WORK/state/watchdog" -maxdepth 1 -type f ! -name .lock 2> /dev/null | wc -l | tr -d ' '; }
-state_keys() { find "$WORK/state/watchdog" -maxdepth 1 -type f ! -name .lock -printf '%f ' 2> /dev/null; }
+state_count() { find "$WORK/state" -maxdepth 1 -type f ! -name .lock 2> /dev/null | wc -l | tr -d ' '; }
+state_keys() { find "$WORK/state" -maxdepth 1 -type f ! -name .lock -printf '%f ' 2> /dev/null; }
 calls() { wc -l < "$CALLS" | tr -d ' '; }
 
 PASS=0
@@ -263,6 +263,14 @@ MODE_ARG=--print run_wd $T0 "$DISCORD"
 check "exit 1 with a problem" "$(rc)" 1
 check "no notification" "$(calls)" 0
 check "no state" "$(state_count)" 0
+
+echo "never executes files from the checkout"
+healthy
+printf 'touch "%s/sourced-marker"\n' "$WORK" > "$WORK/config.sh"
+printf 'touch "%s/sourced-marker"\n' "$WORK" > "$WORK/.env"
+run_wd $T0 "$DISCORD"
+check "config.sh and .env beside the scripts are ignored" "$(test -e "$WORK/sourced-marker" && echo sourced || echo ignored)" ignored
+rm -f "$WORK/config.sh" "$WORK/.env"
 
 echo
 echo "passed $PASS, failed $FAIL"

@@ -26,7 +26,7 @@
 # Settings (environment, usually /etc/frankenllm/watchdog.env):
 #   WATCHDOG_LABEL=FrankenLLM         name shown in alerts (never a hostname)
 #   WATCHDOG_HOST=127.0.0.1           where Ollama listens
-#   WATCHDOG_PORTS="11434 11435"      defaults to FRANKEN_GPU*_PORT from config.sh
+#   WATCHDOG_PORTS="11434 11435"      Ollama ports to check (default shown)
 #   WATCHDOG_REPEAT_HOURS=24          reminder interval while a problem lasts
 #   WATCHDOG_REBOOT_GRACE_HOURS=72    how long a pending reboot is tolerated
 #   WATCHDOG_USE_DOPPLER=true         re-run under `doppler run --` for secrets
@@ -35,7 +35,6 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Secrets from Doppler instead of the env file, when asked for and available.
 if [ "${WATCHDOG_USE_DOPPLER:-}" = "true" ] && [ -z "${WATCHDOG_IN_DOPPLER:-}" ] && command -v doppler > /dev/null; then
@@ -43,7 +42,6 @@ if [ "${WATCHDOG_USE_DOPPLER:-}" = "true" ] && [ -z "${WATCHDOG_IN_DOPPLER:-}" ]
     exec doppler run -- "$0" "$@"
 fi
 
-[ -f "$PROJECT_ROOT/config.sh" ] && source "$PROJECT_ROOT/config.sh" > /dev/null  # prints a banner; keep it out of the journal
 # shellcheck source=watchdog-notify.sh
 source "$SCRIPT_DIR/watchdog-notify.sh"
 
@@ -58,18 +56,15 @@ LABEL="${WATCHDOG_LABEL:-FrankenLLM}"
 HOST="${WATCHDOG_HOST:-127.0.0.1}"
 REPEAT_HOURS="${WATCHDOG_REPEAT_HOURS:-24}"
 REBOOT_GRACE_HOURS="${WATCHDOG_REBOOT_GRACE_HOURS:-72}"
-STATE_DIR="${WATCHDOG_STATE_DIR:-/var/lib/frankenllm}/watchdog"
+STATE_DIR="${WATCHDOG_STATE_DIR:-/var/lib/frankenllm-watchdog}"
 PROC_VERSION="${WATCHDOG_PROC_NVIDIA_VERSION:-/proc/driver/nvidia/version}"
 LIB_DIR="${WATCHDOG_LIBDIR:-/usr/lib/x86_64-linux-gnu}"
 REBOOT_FILE="${WATCHDOG_REBOOT_FILE:-/run/reboot-required}"
 NOW="${WATCHDOG_NOW:-$(date +%s)}"
 
-if [ -n "${WATCHDOG_PORTS:-}" ]; then
-    read -r -a PORTS <<< "$WATCHDOG_PORTS"
-else
-    PORTS=("${FRANKEN_GPU0_PORT:-11434}")
-    [ "${FRANKEN_GPU_COUNT:-2}" -ge 2 ] && PORTS+=("${FRANKEN_GPU1_PORT:-11435}")
-fi
+# Deliberately does not source config.sh or any .env from the checkout: this
+# runs on a timer and must not execute files other users can write.
+read -r -a PORTS <<< "${WATCHDOG_PORTS:-11434 11435}"
 
 PROB_KEYS=()
 PROB_MSGS=()
