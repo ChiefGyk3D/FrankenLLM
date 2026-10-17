@@ -1,0 +1,15 @@
+[Unit]
+Description=FrankenLLM watchdog (GPU, driver and Ollama health alerts)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/frankenllm/scripts/watchdog.sh
+EnvironmentFile=-/etc/frankenllm/watchdog.env
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/frankenllm
