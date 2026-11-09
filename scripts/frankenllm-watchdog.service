@@ -1,0 +1,25 @@
+[Unit]
+Description=FrankenLLM watchdog (GPU, driver and Ollama health alerts)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Needs no root: nvidia-smi, /proc and localhost HTTP are all readable by anyone.
+# Run unprivileged from a root-owned directory so nobody who can write the
+# FrankenLLM checkout can ever get this to run their code as root.
+ExecStart=/usr/local/lib/frankenllm/watchdog.sh
+EnvironmentFile=-/etc/frankenllm/watchdog.env
+Environment=WATCHDOG_STATE_DIR=/var/lib/frankenllm-watchdog
+Environment=HOME=/var/lib/frankenllm-watchdog
+DynamicUser=yes
+StateDirectory=frankenllm-watchdog
+StateDirectoryMode=0750
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
