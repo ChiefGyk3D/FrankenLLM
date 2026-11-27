@@ -5,6 +5,13 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
+# Readiness URL helper (copied next to this script by remote/setup-warmup.sh).
+# Without it the check stays on localhost, as before.
+if [ -f "$SCRIPT_DIR/unit-lib.sh" ]; then
+    source "$SCRIPT_DIR/unit-lib.sh"
+else
+    franken_ready_url() { printf 'http://localhost:%s/api/tags' "$2"; }
+fi
 
 # Log to systemd journal
 log() {
@@ -20,12 +27,12 @@ ELAPSED=0
 log "Waiting for Ollama services to be ready..."
 while [ $ELAPSED -lt $TIMEOUT ]; do
     # Check GPU 0
-    if curl -s -f "http://localhost:$FRANKEN_GPU0_PORT/api/tags" > /dev/null 2>&1; then
+    if curl -s -f "$(franken_ready_url "$FRANKEN_BIND_ADDR" "$FRANKEN_GPU0_PORT")" > /dev/null 2>&1; then
         log "GPU 0 service is ready"
         
         # Check GPU 1 if configured
         if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
-            if curl -s -f "http://localhost:$FRANKEN_GPU1_PORT/api/tags" > /dev/null 2>&1; then
+            if curl -s -f "$(franken_ready_url "$FRANKEN_BIND_ADDR" "$FRANKEN_GPU1_PORT")" > /dev/null 2>&1; then
                 log "GPU 1 service is ready"
                 break
             fi

@@ -85,6 +85,22 @@ export FRANKEN_GPU0_EXTRA_CONTEXT="${FRANKEN_GPU0_EXTRA_CONTEXT:-}"
 export FRANKEN_GPU0_WARMUP_TIMEOUT="${FRANKEN_GPU0_WARMUP_TIMEOUT:-180}"
 export FRANKEN_GPU1_WARMUP_TIMEOUT="${FRANKEN_GPU1_WARMUP_TIMEOUT:-120}"
 
+# --- Optional remote-install hardening (all unset by default = no change) ---
+# Read by remote/install.sh and validated there before anything is written.
+# FRANKEN_BIND_ADDR   IPv4 address Ollama binds to (e.g. 192.0.2.10), written with
+#                     the port into OLLAMA_HOST. Unset = all interfaces (0.0.0.0).
+# FRANKEN_SERVICE_USER  Account the units run as. Unset = the invoking user. When
+#                     set, install.sh creates it as a system account (nologin
+#                     shell, home /var/lib/<name> holds the models) if missing.
+#                     Must match ^[a-z_][a-z0-9_-]{0,31}$ .
+# FRANKEN_MEMORY_MAX  systemd MemoryMax for each unit (e.g. 24G, 512M, infinity).
+# FRANKEN_TASKS_MAX   systemd TasksMax for each unit (e.g. 512, infinity).
+# Unset or empty MemoryMax/TasksMax writes no line. See docs/CONFIGURATION.md.
+export FRANKEN_BIND_ADDR="${FRANKEN_BIND_ADDR:-}"
+export FRANKEN_SERVICE_USER="${FRANKEN_SERVICE_USER:-}"
+export FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
+export FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
+
 # Detect if we're installing locally or remotely
 if [[ "$FRANKEN_SERVER_IP" == "localhost" || "$FRANKEN_SERVER_IP" == "127.0.0.1" ]]; then
     export FRANKEN_IS_LOCAL=true

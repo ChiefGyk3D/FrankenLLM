@@ -119,6 +119,40 @@ main model. If you change models, re-check with `ollama ps` that both show
    - Shows all installed models
    - Helps verify correct configuration
 
+### Remote Install Hardening (opt-in)
+
+`remote/install.sh` reads four optional settings. All are unset by default, which
+keeps the current behavior (bind `0.0.0.0`, units run as the invoking user, no
+resource caps). Each is validated before anything is copied to the server or
+written to a unit; an invalid value stops the install.
+
+```bash
+# IPv4 address Ollama binds to; written with the port into OLLAMA_HOST
+FRANKEN_BIND_ADDR=192.0.2.10
+
+# Account the units run as. Created as a system account if missing (nologin
+# shell, home /var/lib/<name> holding ~/.ollama/models-gpuN, owned by it).
+# Must match ^[a-z_][a-z0-9_-]{0,31}$
+FRANKEN_SERVICE_USER=frankenllm
+
+# systemd MemoryMax / TasksMax per unit: a number with optional K/M/G/T, or infinity
+FRANKEN_MEMORY_MAX=24G
+FRANKEN_TASKS_MAX=512
+```
+
+Notes: with `FRANKEN_BIND_ADDR` set, the other scripts must reach the server at
+that address. With `FRANKEN_SERVICE_USER` set, models live under the new
+account's home, not the invoking user's `~/.ollama`; models already pulled are
+not moved. `root` is refused as a service user, and so is any existing account
+with uid 0. GPU access depends on group membership: NVIDIA device nodes are
+often restricted to the `video` or `render` group, so the installer adds the
+service user to whichever of those groups exist on the server (confirmed with
+`getent`) and prints which it added. If neither exists, nothing is added and
+you must grant device access yourself. `remote/setup-warmup.sh` validates
+`FRANKEN_BIND_ADDR` and the boot warmup checks readiness at that address when
+set (localhost otherwise). Unset or empty `MemoryMax`/`TasksMax` writes no line. The text
+rendering is tested by `tests/test-unit-render.sh`.
+
 ## Example Configurations
 
 ### Single GPU Setup
@@ -392,6 +426,12 @@ FRANKEN_GPU1_MODEL     # Model for GPU 1
 FRANKEN_GPU0_GUARD_MODEL  # Guard/moderation model warmed alongside GPU 0's main model (empty = off)
 FRANKEN_GPU0_CONTEXT      # OLLAMA_CONTEXT_LENGTH for GPU 0's instance (default 8192)
 FRANKEN_GPU1_CONTEXT      # OLLAMA_CONTEXT_LENGTH for GPU 1's instance (default 32768)
+
+# Remote install hardening (all default unset = unchanged behavior)
+FRANKEN_BIND_ADDR         # IPv4 address Ollama binds to (default all interfaces)
+FRANKEN_SERVICE_USER      # Account the units run as (default the invoking user)
+FRANKEN_MEMORY_MAX        # systemd MemoryMax per unit, e.g. 24G
+FRANKEN_TASKS_MAX         # systemd TasksMax per unit, e.g. 512
 
 # Per-model layout (all default empty = off / instance context)
 FRANKEN_GPU1_GUARD_MODEL    # Guard model warmed on GPU 1 (ignored with FRANKEN_GPU_COUNT=1)

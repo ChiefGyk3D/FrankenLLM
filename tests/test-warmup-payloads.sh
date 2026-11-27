@@ -250,4 +250,9 @@ check "vulkan invalid (remote path): fails" 1 "$RC"
 check "vulkan invalid (remote path): no ssh/sudo calls" "no" "$([ -s "$WORK/calls.log" ] && echo yes || echo no)"
 
 echo "passed: $PASS  failed: $FAIL"
-[ "$FAIL" -eq 0 ]
+
+# --- 13. Unit-render test (run here so the existing CI command covers it) -----
+bash "$REPO/tests/test-unit-render.sh"
+UNIT_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ]
