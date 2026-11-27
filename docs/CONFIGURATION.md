@@ -126,6 +126,23 @@ keeps the current behavior (bind `0.0.0.0`, units run as the invoking user, no
 resource caps). Each is validated before anything is copied to the server or
 written to a unit; an invalid value stops the install.
 
+How the installer reaches the server: `remote/install.sh` joins
+`remote/unit-lib.sh` and `remote/server-install.sh` into one script, creates a
+private directory on the server (`mktemp -d`, mode 0700), copies the script into
+it, and checks the copy before running it (directory and file are regular, not
+links, owned by you, mode 0700, and the sha256 matches the hash computed on your
+workstation). The script runs from that path and the directory is removed when it
+ends, also on failure. Nothing is written to a fixed path under `/tmp`. Every
+value (ports, bind address, account name, limits, version) is sent as one quoted
+argument, never spliced into a command string. `FRANKEN_GPU0_PORT` and
+`FRANKEN_GPU1_PORT` must be decimal numbers from 1 to 65535 and `FRANKEN_SERVER_IP`
+must be a host name or address (optionally `user@host`), checked on the workstation
+and again on the server. `remote/setup-warmup.sh` requires `FRANKEN_INSTALL_DIR` to
+be an absolute path of letters, digits, `.`, `_`, `-` and `/` with no empty, `.` or
+`..` components (at most 200 characters); the warmup unit is rendered on the server
+after the same check, verified with `systemd-analyze` when it exists, and installed
+by an atomic rename. Covered by `tests/test-remote-transport.sh`.
+
 ```bash
 # IPv4 address Ollama binds to; written with the port into OLLAMA_HOST
 FRANKEN_BIND_ADDR=192.0.2.10
@@ -139,8 +156,13 @@ FRANKEN_SERVICE_USER=frankenllm
 FRANKEN_MEMORY_MAX=24G
 FRANKEN_TASKS_MAX=512
 
-# Pin the Ollama version the install fetches: X.Y.Z or X.Y.Z-rcN
+# Pin the Ollama version (X.Y.Z or X.Y.Z-rcN). 0.33.2 has a checksum in
+# remote/ollama-checksums.txt; for another version also set the sha256 of the
+# release asset (lowercase hex, from the GitHub release digest)
 FRANKEN_OLLAMA_VERSION=0.33.2
+# FRANKEN_OLLAMA_SHA256=
+# Not recommended: allow an unverified download of the upstream install script
+# FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true
 
 # Fail-closed GPU guard: true or false (unset or empty = false)
 FRANKEN_REQUIRE_GPU=true
@@ -149,8 +171,13 @@ FRANKEN_REQUIRE_GPU=true
 Notes: with `FRANKEN_BIND_ADDR` set, the other scripts must reach the server at
 that address. With `FRANKEN_SERVICE_USER` set, models live under the new
 account's home, not the invoking user's `~/.ollama`; models already pulled are
-not moved. `root` is refused as a service user, and so is any existing account
-with uid 0. GPU access depends on group membership: NVIDIA device nodes are
+not moved. `root` is refused as a service user. An EXISTING account is adopted only
+when it is already a dedicated system account: uid 1 to 999, a nologin shell
+(`/usr/sbin/nologin`, `/sbin/nologin`, `/usr/bin/nologin`, `/bin/false`), a home
+under `/var/lib`, and no groups beyond its own group, `video` and `render`.
+Anything else (a login or CI account, a uid of 1000 or more) stops the install
+before anything changes, with the reason; pick another name and it is created for
+you. GPU access depends on group membership: NVIDIA device nodes are
 often restricted to the `video` or `render` group, so the installer adds the
 service user to whichever of those groups exist on the server (confirmed with
 `getent`) and prints which it added. If neither exists, nothing is added and
@@ -158,6 +185,28 @@ you must grant device access yourself. `remote/setup-warmup.sh` validates
 `FRANKEN_BIND_ADDR` and the boot warmup checks readiness at that address when
 set (localhost otherwise). Unset or empty `MemoryMax`/`TasksMax` writes no line. The text
 rendering is tested by `tests/test-unit-render.sh`.
+
+The service swap is staged and reversible. The server script runs with
+`set -euo pipefail`. The two units are rendered into a private staging directory and
+checked with `systemd-analyze verify` (when available) before anything is changed.
+The default `ollama.service` is stopped (it holds port 11434), the new units are
+installed by atomic rename, started, and health-checked (the unit is active and
+`/api/tags` answers on its port); only then are they enabled and the default service
+disabled, its unit file removed and masked. If any step after the staging fails, the
+installer restores the earlier unit files and the earlier active, enabled and masked
+state of `ollama.service`, `ollama-gpu0` and `ollama-gpu1`. A system account created
+earlier in the same run is kept. Every restoration step is checked and the result is
+read back (unit files, enabled, masked and active state); success is reported only
+when all of it matches, otherwise the installer prints `ROLLBACK INCOMPLETE`, lists
+the steps that failed and exits 70. The default service is only retired when
+`systemctl is-enabled` reads back `masked` (a failing disable or mask rolls back).
+`curl` must be installed on the server: it is the readiness probe, and without it
+the install stops before anything is changed. The verified Ollama files are
+extracted into a staging directory under `/usr/local`, validated (layout and
+reported version), and moved into place as whole directories; the old ones are kept
+in `/usr/local/.franken-ollama-undo` and put back on any later failure. A late tar
+or disk error leaves the previous install intact. Covered by `tests/test-install-flow.sh`
+and `tests/test-ollama-verify.sh`.
 
 `FRANKEN_REQUIRE_GPU=true` adds `ExecStartPre=<absolute path of nvidia-smi> -L` before
 `ExecStart` in each unit. If the NVIDIA driver fails to load (for example after a
@@ -170,15 +219,33 @@ script finds `nvidia-smi` with `command -v`, requires the path to match
 `^/[A-Za-z0-9/_.-]+$`, and fails the install with a clear message otherwise. Unset
 or `false` leaves the unit text unchanged.
 
-`FRANKEN_OLLAMA_VERSION` is passed to the upstream installer as `OLLAMA_VERSION`
-(`curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.33.2 sh`). Unset keeps
-the current behavior (latest upstream) and prints a warning that the install is
-unpinned. The value is validated on the workstation and again on the server
-(`^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$`). After install the version reported by the
-`ollama` binary is printed, and a pinned install fails if it differs. An existing
-install at a different version is re-installed at the pin. The upstream script has
-no checksum step, so a pin gives a reproducible version, not integrity. The helpers
-are tested by `tests/test-ollama-pin.sh`.
+`FRANKEN_OLLAMA_VERSION` pins the Ollama version (`^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$`,
+checked on the workstation and again on the server). The install is verified, not
+piped into a shell:
+
+1. The pin must have a known sha256: an entry in `remote/ollama-checksums.txt`
+   (`<version> <asset> <sha256>`, shipped for 0.33.2 and `ollama-linux-amd64.tar.zst`),
+   or `FRANKEN_OLLAMA_SHA256=<64 lowercase hex>` for another version or architecture.
+   Take the value from the GitHub release page digest for the asset.
+2. The server downloads exactly that release asset from
+   `https://github.com/ollama/ollama/releases/download/v<version>/` with
+   `curl --proto =https --proto-redir =https`, checks the sha256 BEFORE decompressing
+   or extracting, rejects archives with absolute or `..` member names, device nodes or
+   links that leave the install root, and then extracts under `/usr/local`
+   (`bin/ollama`, `lib/ollama`: the same files the upstream installer places). No
+   account or service is created by this step. `zstd` must be installed on the
+   server; the install stops with a clear message when it is not.
+3. Without a pinned version and a checksum the install stops (fail closed). An
+   existing Ollama that already satisfies the request is kept and needs neither.
+   After install the version reported by the `ollama` binary is printed, and a
+   pinned install fails if it differs.
+
+`FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true` is the explicit, not recommended opt-out: the
+upstream `install.sh` is downloaded over https to a private file and run as is,
+with a loud warning and no integrity check (it is never piped into a shell).
+Anything other than `true` or `false` is rejected. The helpers are tested by
+`tests/test-ollama-pin.sh`, `tests/test-ollama-verify.sh` (fake artifact, wrong
+hash, hostile archives, missing zstd) and `tests/test-install-flow.sh`.
 
 ## Example Configurations
 
@@ -431,7 +498,20 @@ FRANKEN_SERVER_IP=localhost
 
 ## Environment Variables
 
-All configuration is loaded from `.env` through `config.sh`:
+All configuration is loaded from `.env` through `config.sh`. The file is read as
+data, never executed: only `KEY=VALUE` lines for `FRANKEN_*` keys are accepted. A
+value is either bare (letters, digits and `_ @ % + = : , . / -`), `"double quoted"`
+or `'single quoted'`; quoted values are literal (no backslash, `$` or backtick).
+Duplicate keys, control characters (tabs and carriage returns too) and any other
+syntax stop the script with an error and nothing is loaded. Keys that are not
+`FRANKEN_*` are ignored with a warning. A variable already set in the environment
+wins over the file.
+
+Model names and ports are validated before any command runs. A model name may
+contain letters, digits, `.`, `-`, `_`, `:` and `/` and must start with a letter or
+digit; a port must be a decimal number from 1 to 65535. Commands that run on the
+server are sent as separate quoted arguments (`franken_exec ollama pull "$model"`),
+never as a command string. `tests/test-exec-args.sh` covers this.
 
 ```bash
 # Core

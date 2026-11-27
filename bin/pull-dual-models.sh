@@ -66,6 +66,21 @@ if [ $ACTUAL_ARGS -ne $EXPECTED_ARGS ]; then
     exit 1
 fi
 
+# Validate every model name and port before anything is run
+for arg in "$@"; do
+    if ! franken_valid_model_name "$arg"; then
+        echo "❌ Invalid model name (letters, digits, . - _ : / only, starting with a letter or digit)"
+        exit 1
+    fi
+done
+for i in $(seq 0 $(($FRANKEN_GPU_COUNT - 1))); do
+    gpu_port_var="FRANKEN_GPU${i}_PORT"
+    if [ -n "${!gpu_port_var}" ] && ! franken_valid_port "${!gpu_port_var}"; then
+        echo "❌ $gpu_port_var must be a number from 1 to 65535"
+        exit 1
+    fi
+done
+
 echo "=== Pulling Models on $FRANKEN_GPU_COUNT GPU(s) ==="
 echo ""
 
@@ -87,7 +102,7 @@ for i in $(seq 0 $(($FRANKEN_GPU_COUNT - 1))); do
     
     echo "GPU $i ($gpu_name) - Port $gpu_port:"
     echo "  Pulling $model..."
-    franken_exec "OLLAMA_HOST=http://$MODEL_HOST:$gpu_port ollama pull $model"
+    franken_exec env "OLLAMA_HOST=http://$MODEL_HOST:$gpu_port" ollama pull "$model"
     echo ""
 done
 

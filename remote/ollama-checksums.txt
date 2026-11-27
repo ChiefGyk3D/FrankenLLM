@@ -1,0 +1,7 @@
+# Known-good sha256 of Ollama release assets, one per line:
+#   <version> <asset> <sha256>
+# remote/install.sh looks up the pinned FRANKEN_OLLAMA_VERSION here (for the
+# asset built for x86_64) and sends the checksum to the server, which refuses to
+# install a download that does not match. Take new entries from the GitHub
+# release page digest for the asset, not from the file you downloaded.
+0.33.2 ollama-linux-amd64.tar.zst 9785247dea264d9072f09f6c9c0eb4b8e666892826a3d8388eba3e8fb9ed1db9

@@ -106,10 +106,10 @@ run add-model.sh 1 m1
 check "add-model bind (local)" "ollama OLLAMA_HOST=192.0.2.10:11435 args=pull m1" "$LOG"
 ENVV=(FRANKEN_SERVER_IP=remote-host FRANKEN_GPU_COUNT=2 FRANKEN_BIND_ADDR=192.0.2.10)
 run add-model.sh 0 m1
-check "add-model bind (ssh)" "ssh remote-host OLLAMA_HOST=192.0.2.10:11434 ollama pull 'm1'" "$LOG"
+check "add-model bind (ssh)" "ssh -- remote-host 'env' 'OLLAMA_HOST=192.0.2.10:11434' 'ollama' 'pull' 'm1'" "$LOG"
 ENVV=(FRANKEN_SERVER_IP=remote-host FRANKEN_GPU_COUNT=2)
 run add-model.sh 0 m1
-check "add-model default (ssh)" "ssh remote-host OLLAMA_HOST=127.0.0.1:11434 ollama pull 'm1'" "$LOG"
+check "add-model default (ssh)" "ssh -- remote-host 'env' 'OLLAMA_HOST=127.0.0.1:11434' 'ollama' 'pull' 'm1'" "$LOG"
 
 # invalid and hostile values: old host, one warning, value never in a command
 for v in "192.0.2.256" "example.com" "192.0.2.10; touch $WORK/pwned" "\$(touch $WORK/pwned)" "192.0.2.10:80"; do

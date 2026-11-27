@@ -5,12 +5,70 @@
 # Get the script directory
 CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load .env file if it exists
-if [ -f "$CONFIG_DIR/.env" ]; then
-    set -a
-    source "$CONFIG_DIR/.env"
-    set +a
-fi
+# franken_load_env FILE - read FILE as DATA (never sourced, never eval'd).
+# Accepted lines: blank, "# comment", and [export ]FRANKEN_NAME=VALUE where VALUE
+# is unquoted (letters, digits and _ @ % + = : , . / -), "double quoted" or
+# 'single quoted'. Quoted values are literal: no backslash, $, backtick or
+# nested quote of the same kind. Duplicate keys, control characters (tab and CR
+# included) and any other syntax are errors and nothing is loaded (fail closed).
+# Keys that are not FRANKEN_* are ignored with a warning. A variable already set
+# in the environment (even empty) wins over the file.
+franken_load_env() {
+    local file="$1" line key val lineno=0 seen=" " n i
+    local -a keys=() vals=()
+    local re_key='^(export[[:space:]]+)?(FRANKEN_[A-Z0-9_]+)=(.*)$'
+    local re_other='^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*='
+    local re_dq='^"([^"\\$`]*)"[[:space:]]*$'
+    local re_sq="^'([^']*)'[[:space:]]*\$"
+    local re_bare='^[A-Za-z0-9_@%+=:,./-]*$'
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        lineno=$((lineno + 1))
+        if [[ "$line" =~ [[:cntrl:]] ]]; then
+            echo "ERROR: $file line $lineno: control characters are not allowed" >&2
+            return 1
+        fi
+        [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+        if [[ "$line" =~ $re_key ]]; then
+            key="${BASH_REMATCH[2]}"
+            val="${BASH_REMATCH[3]}"
+        elif [[ "$line" =~ $re_other ]]; then
+            echo "WARNING: $file line $lineno: ignoring a setting that is not FRANKEN_*" >&2
+            continue
+        else
+            echo "ERROR: $file line $lineno: not a KEY=VALUE line" >&2
+            return 1
+        fi
+        if [[ "$seen" == *" $key "* ]]; then
+            echo "ERROR: $file line $lineno: duplicate key $key" >&2
+            return 1
+        fi
+        seen="$seen$key "
+        if [[ "$val" =~ $re_dq ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ $re_sq ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ ! "$val" =~ $re_bare ]]; then
+            echo "ERROR: $file line $lineno: unsupported value syntax for $key (use plain quotes; no backslash, dollar or backtick)" >&2
+            return 1
+        fi
+        keys+=("$key")
+        vals+=("$val")
+    done < "$file"
+    n=${#keys[@]}
+    for ((i = 0; i < n; i++)); do
+        key="${keys[$i]}"
+        if [ -z "${!key+x}" ]; then
+            printf -v "$key" '%s' "${vals[$i]}"
+            export "${key?}"
+        fi
+    done
+    return 0
+}
+
+# Load .env if it exists (as data, see franken_load_env). A bad file stops the
+# calling script: running with a half-read configuration is worse than failing.
+franken_load_env "$CONFIG_DIR/.env" || exit 1
 
 # Server IP address - set to "localhost" or "127.0.0.1" for local installation
 # Set to remote IP (e.g., "192.168.201.145") for remote installation
@@ -96,11 +154,14 @@ export FRANKEN_GPU1_WARMUP_TIMEOUT="${FRANKEN_GPU1_WARMUP_TIMEOUT:-120}"
 # FRANKEN_MEMORY_MAX  systemd MemoryMax for each unit (e.g. 24G, 512M, infinity).
 # FRANKEN_TASKS_MAX   systemd TasksMax for each unit (e.g. 512, infinity).
 # Unset or empty MemoryMax/TasksMax writes no line. See docs/CONFIGURATION.md.
-# FRANKEN_OLLAMA_VERSION  Pin the Ollama version the remote install fetches, as
-#                     X.Y.Z or X.Y.Z-rcN (e.g. 0.33.2); passed to the upstream
-#                     installer as OLLAMA_VERSION and checked after install.
-#                     Unset = latest, with a warning. The upstream script has no
-#                     checksum step: a pin is reproducible, not integrity-checked.
+# FRANKEN_OLLAMA_VERSION  Pin the Ollama version the remote install uses, as
+#                     X.Y.Z or X.Y.Z-rcN (e.g. 0.33.2). The release asset is
+#                     downloaded from GitHub and its sha256 is checked before it
+#                     is extracted: the checksum comes from
+#                     remote/ollama-checksums.txt or FRANKEN_OLLAMA_SHA256.
+#                     Without a pin and a checksum the install stops, unless
+#                     FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true (not recommended).
+# FRANKEN_OLLAMA_SHA256  64 lowercase hex characters; needs FRANKEN_OLLAMA_VERSION.
 # FRANKEN_REQUIRE_GPU  true or false (unset/empty = false). When true, each unit
 #                     gets ExecStartPre=<nvidia-smi> -L, so a missing driver
 #                     (e.g. after a kernel update) makes the unit FAIL instead of
@@ -112,6 +173,8 @@ export FRANKEN_SERVICE_USER="${FRANKEN_SERVICE_USER:-}"
 export FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
 export FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
 export FRANKEN_OLLAMA_VERSION="${FRANKEN_OLLAMA_VERSION:-}"
+export FRANKEN_OLLAMA_SHA256="${FRANKEN_OLLAMA_SHA256:-}"
+export FRANKEN_ALLOW_UNVERIFIED_OLLAMA="${FRANKEN_ALLOW_UNVERIFIED_OLLAMA:-}"
 export FRANKEN_REQUIRE_GPU="${FRANKEN_REQUIRE_GPU:-}"
 
 # Detect if we're installing locally or remotely
@@ -123,12 +186,31 @@ else
     export FRANKEN_SSH_PREFIX="ssh $FRANKEN_SERVER_IP"
 fi
 
-# Helper function to run commands locally or remotely
+# franken_sh_quote ARG... - one line of POSIX single-quoted words that any
+# sh-compatible login shell reads back as exactly ARG... (embedded quotes,
+# spaces, newlines and metacharacters included).
+franken_sh_quote() {
+    local out="" a
+    for a in "$@"; do
+        a="${a//\'/\'\\\'\'}"
+        out+="${out:+ }'$a'"
+    done
+    printf '%s' "$out"
+}
+
+# Helper function to run a command locally or remotely. It takes an ARGUMENT
+# ARRAY, never a command string: franken_exec ollama pull "$model". Remotely the
+# words are quoted with franken_sh_quote, so data cannot become shell syntax.
+# For a fixed script use: franken_exec bash -c 'script using "$1"' _ ARG
 franken_exec() {
+    if [ "$#" -eq 0 ]; then
+        echo "franken_exec: no command given" >&2
+        return 2
+    fi
     if [ "$FRANKEN_IS_LOCAL" = true ]; then
-        bash -c "$1"
+        "$@"
     else
-        ssh "$FRANKEN_SERVER_IP" "$1"
+        ssh -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote "$@")"
     fi
 }
 
@@ -145,6 +227,7 @@ franken_copy() {
 }
 
 # Export the helper functions
+export -f franken_sh_quote
 export -f franken_exec
 export -f franken_copy
 

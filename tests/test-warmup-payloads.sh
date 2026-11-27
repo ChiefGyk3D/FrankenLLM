@@ -263,8 +263,28 @@ PIN_RC=$?
 bash "$REPO/tests/test-model-host.sh"
 HOST_RC=$?
 
-# --- 16. Watchdog test (scratch dir only; no files left in the repo) ----------
+# --- 16. .env is read as data -------------------------------------------------
+bash "$REPO/tests/test-env-parse.sh"
+ENV_RC=$?
+
+# --- 17. Arguments, not shell strings (model names, ports) --------------------
+bash "$REPO/tests/test-exec-args.sh"
+EXEC_RC=$?
+
+# --- 18. Remote transport: private directory, quoting, install dir ------------
+bash "$REPO/tests/test-remote-transport.sh"
+TRANSPORT_RC=$?
+
+# --- 19. Verified Ollama download (checksum, archive checks) ------------------
+bash "$REPO/tests/test-ollama-verify.sh"
+VERIFY_RC=$?
+
+# --- 20. Server-side install flow (Ollama policy, account policy, rollback) ---
+bash "$REPO/tests/test-install-flow.sh"
+FLOW_RC=$?
+
+# --- 21. Watchdog test (scratch dir only; no files left in the repo) ----------
 bash "$REPO/tests/test-watchdog.sh"
 WATCHDOG_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$WATCHDOG_RC" -eq 0 ]
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ] && [ "$EXEC_RC" -eq 0 ] && [ "$TRANSPORT_RC" -eq 0 ] && [ "$VERIFY_RC" -eq 0 ] && [ "$FLOW_RC" -eq 0 ] && [ "$WATCHDOG_RC" -eq 0 ]

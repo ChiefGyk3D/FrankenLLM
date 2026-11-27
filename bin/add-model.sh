@@ -66,10 +66,10 @@ list_models_on_gpu() {
     name=$(get_gpu_name "$gpu")
     
     echo -e "${CYAN}GPU $gpu ($name) - Port $port:${NC}"
-    if [ "$FRANKEN_IS_LOCAL" = true ]; then
-        OLLAMA_HOST="$MODEL_HOST:$port" ollama list 2>/dev/null || echo "  (no models or service not running)"
+    if franken_valid_port "$port"; then
+        franken_exec env "OLLAMA_HOST=$MODEL_HOST:$port" ollama list 2>/dev/null || echo "  (no models or service not running)"
     else
-        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=$MODEL_HOST:$port ollama list 2>/dev/null" || echo "  (no models or service not running)"
+        echo "  (invalid port configured)"
     fi
     echo ""
 }
@@ -81,16 +81,15 @@ pull_model_to_gpu() {
     port=$(get_gpu_port "$gpu")
     name=$(get_gpu_name "$gpu")
     
+    if ! franken_valid_model_name "$model" || ! franken_valid_port "$port"; then
+        echo -e "${RED}❌ Invalid model name or port (model: letters, digits, . - _ : / only)${NC}"
+        return 1
+    fi
+
     echo -e "${BLUE}📥 Pulling $model to GPU $gpu ($name)...${NC}"
     echo ""
-    
-    if [ "$FRANKEN_IS_LOCAL" = true ]; then
-        OLLAMA_HOST="$MODEL_HOST:$port" ollama pull "$model"
-    else
-        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=$MODEL_HOST:$port ollama pull '$model'"
-    fi
-    
-    if [ $? -eq 0 ]; then
+
+    if franken_exec env "OLLAMA_HOST=$MODEL_HOST:$port" ollama pull "$model"; then
         echo ""
         echo -e "${GREEN}✅ Successfully added $model to GPU $gpu ($name)${NC}"
         return 0
@@ -108,15 +107,14 @@ remove_model_from_gpu() {
     port=$(get_gpu_port "$gpu")
     name=$(get_gpu_name "$gpu")
     
-    echo -e "${YELLOW}🗑️  Removing $model from GPU $gpu ($name)...${NC}"
-    
-    if [ "$FRANKEN_IS_LOCAL" = true ]; then
-        OLLAMA_HOST="$MODEL_HOST:$port" ollama rm "$model"
-    else
-        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=$MODEL_HOST:$port ollama rm '$model'"
+    if ! franken_valid_model_name "$model" || ! franken_valid_port "$port"; then
+        echo -e "${RED}❌ Invalid model name or port (model: letters, digits, . - _ : / only)${NC}"
+        return 1
     fi
-    
-    if [ $? -eq 0 ]; then
+
+    echo -e "${YELLOW}🗑️  Removing $model from GPU $gpu ($name)...${NC}"
+
+    if franken_exec env "OLLAMA_HOST=$MODEL_HOST:$port" ollama rm "$model"; then
         echo -e "${GREEN}✅ Removed $model from GPU $gpu${NC}"
     else
         echo -e "${RED}❌ Failed to remove $model from GPU $gpu${NC}"

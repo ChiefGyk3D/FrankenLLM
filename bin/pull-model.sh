@@ -21,17 +21,28 @@ if [ -z "$MODEL_NAME" ]; then
     exit 1
 fi
 
+if ! franken_valid_model_name "$MODEL_NAME"; then
+    echo "❌ Invalid model name (letters, digits, . - _ : / only, starting with a letter or digit)"
+    exit 1
+fi
+for port_var in FRANKEN_GPU0_PORT FRANKEN_GPU1_PORT; do
+    if ! franken_valid_port "${!port_var}"; then
+        echo "❌ $port_var must be a number from 1 to 65535"
+        exit 1
+    fi
+done
+
 echo "=== Pulling $MODEL_NAME on all GPUs ==="
 echo "GPU Count: $FRANKEN_GPU_COUNT"
 echo ""
 
 echo "GPU 0 ($FRANKEN_GPU0_NAME) - Port $FRANKEN_GPU0_PORT:"
-franken_exec "OLLAMA_HOST=http://$MODEL_HOST:$FRANKEN_GPU0_PORT ollama pull $MODEL_NAME"
+franken_exec env "OLLAMA_HOST=http://$MODEL_HOST:$FRANKEN_GPU0_PORT" ollama pull "$MODEL_NAME"
 
 if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
     echo ""
     echo "GPU 1 ($FRANKEN_GPU1_NAME) - Port $FRANKEN_GPU1_PORT:"
-    franken_exec "OLLAMA_HOST=http://$MODEL_HOST:$FRANKEN_GPU1_PORT ollama pull $MODEL_NAME"
+    franken_exec env "OLLAMA_HOST=http://$MODEL_HOST:$FRANKEN_GPU1_PORT" ollama pull "$MODEL_NAME"
 fi
 
 echo ""
