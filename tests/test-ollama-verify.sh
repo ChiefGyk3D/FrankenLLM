@@ -146,6 +146,66 @@ for name in parent absolute symlink-out symlink-parent; do
     check "hostile archive [$name]: nothing written outside" "no" "$([ -e "$WORK/f" ] || [ -e /tmp/franken-never-f ] && echo yes || echo no)"
 done
 
+# --- transactional replacement: failures after the checksum must leave the old install intact ---
+# privilege wrappers (the PRIVILEGE_CMD argument) that break one step
+cat > "$WORK/stub/priv-tar-fails" << 'STUB'
+#!/bin/bash
+# extract only bin/ (a partial extraction, as a full disk would leave), then fail
+if [ "$1" = tar ]; then
+    shift
+    tar "$@" --wildcards 'bin/*' 2> /dev/null
+    exit 1
+fi
+exec "$@"
+STUB
+cat > "$WORK/stub/priv-second-mv-fails" << 'STUB'
+#!/bin/bash
+# the move of the staged bin/ollama into place fails (the lib move before it worked)
+if [ "$1" = mv ] && [[ "$*" == *"/stage/bin/ollama"* ]]; then exit 1; fi
+exec "$@"
+STUB
+chmod +x "$WORK/stub/priv-tar-fails" "$WORK/stub/priv-second-mv-fails"
+UNDO="$WORK/root/.franken-ollama-undo"
+install_priv() {  # install_priv WRAPPER ARTIFACT SHA [VERSION] with an old install in place
+    : > "$LOG"
+    rm -rf "${WORK:?}/root"
+    mkdir -p "$WORK/root/lib/ollama" "$WORK/root/bin"
+    echo "old" > "$WORK/root/lib/ollama/OLD"
+    echo "OLDBIN" > "$WORK/root/bin/ollama"
+    OUT=$(PATH="$WORK/stub:$PATH" STUB_LOG="$LOG" STUB_ARTIFACT="$2" \
+        franken_ollama_install_verified "${4:-0.33.2}" "$3" "$ASSET" "$WORK/root" "$1" 2>&1)
+    RC=$?
+}
+install_priv "$WORK/stub/priv-tar-fails" "$WORK/art/good.tar.zst" "$GOOD_SHA"
+check "tar fails midway: rc" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "tar fails midway: old lib intact" "old" "$(cat "$WORK/root/lib/ollama/OLD" 2> /dev/null)"
+check "tar fails midway: old binary intact" "OLDBIN" "$(cat "$WORK/root/bin/ollama" 2> /dev/null)"
+check "tar fails midway: no partial new file in the install" "OLD" "$(ls "$WORK/root/lib/ollama")"
+check "tar fails midway: staging removed" "no" "$([ -e "$UNDO" ] && echo yes || echo no)"
+check "tar fails midway: says the old install was not touched" "yes" "$(grep -q 'was not touched' <<< "$OUT" && echo yes || echo no)"
+install_priv "$WORK/stub/priv-second-mv-fails" "$WORK/art/good.tar.zst" "$GOOD_SHA"
+check "second move fails: rc" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "second move fails: old lib restored" "old" "$(cat "$WORK/root/lib/ollama/OLD" 2> /dev/null)"
+check "second move fails: new lib removed again" "no" "$([ -e "$WORK/root/lib/ollama/libfoo.so" ] && echo yes || echo no)"
+check "second move fails: old binary restored" "OLDBIN" "$(cat "$WORK/root/bin/ollama" 2> /dev/null)"
+check "second move fails: staging removed" "no" "$([ -e "$UNDO" ] && echo yes || echo no)"
+# staged version differs from the pin
+install_priv env "$WORK/art/good.tar.zst" "$GOOD_SHA" 0.34.0
+check "version differs: refused" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "version differs: old install intact" "old OLDBIN" "$(cat "$WORK/root/lib/ollama/OLD") $(cat "$WORK/root/bin/ollama")"
+# success keeps the backups until the caller decides; restore puts everything back; discard drops them
+install_priv env "$WORK/art/good.tar.zst" "$GOOD_SHA"
+check "success: new files in place" "lib" "$(cat "$WORK/root/lib/ollama/libfoo.so" 2> /dev/null)"
+check "success: old files kept in the undo area" "old OLDBIN" "$(cat "$UNDO/backup/lib" 2> /dev/null; cat "$UNDO/backup/lib/OLD" 2> /dev/null) $(cat "$UNDO/backup/bin" 2> /dev/null)"
+franken_ollama_undo_restore "$WORK/root" env
+check "restore: rc" "0" "$?"
+check "restore: old install back, new gone" "old OLDBIN no" "$(cat "$WORK/root/lib/ollama/OLD") $(cat "$WORK/root/bin/ollama") $([ -e "$WORK/root/lib/ollama/libfoo.so" ] && echo yes || echo no)"
+check "restore: undo area removed" "no" "$([ -e "$UNDO" ] && echo yes || echo no)"
+check "restore is idempotent" "0" "$(franken_ollama_undo_restore "$WORK/root" env; echo $?)"
+install_priv env "$WORK/art/good.tar.zst" "$GOOD_SHA"
+franken_ollama_undo_discard "$WORK/root" env
+check "discard: undo area removed, new install stays" "no lib" "$([ -e "$UNDO" ] && echo yes || echo no) $(cat "$WORK/root/lib/ollama/libfoo.so")"
+
 # --- download failure, bad inputs ----------------------------------------------------------------
 : > "$LOG"
 check "curl failure: rc" "yes" "$(STUB_CURL_FAIL=1 PATH="$WORK/stub:$PATH" STUB_LOG="$LOG" STUB_ARTIFACT="$WORK/art/good.tar.zst" \

@@ -90,6 +90,143 @@ if [ "$GPU_COUNT" -lt 2 ]; then
     echo ""
 fi
 
+# curl is the readiness probe for the new services (and the Ollama download): a
+# missing probe tool must stop the install BEFORE anything is changed.
+if ! command -v curl &> /dev/null; then
+    echo "❌ curl is required (health check of the new services, release download) but was not found."
+    echo "   Install it first (Debian/Ubuntu: sudo apt-get install curl); nothing was changed."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Failure handling, armed before the first change. On any non-zero exit:
+#   - the previous Ollama files are put back if a replacement was swapped in
+#   - the earlier unit files and enabled/active/masked states are restored once
+#     the service swap has started (ROLLBACK_ARMED)
+# Every restoration step is checked and recorded, and the result is read back.
+# Success is only reported when everything was restored; otherwise the script
+# says "ROLLBACK INCOMPLETE", lists the steps that failed and exits 70.
+# ---------------------------------------------------------------------------
+UNIT_DIR=/etc/systemd/system
+UNITS=()
+STAGE="$(mktemp -d)"
+mkdir -p "$STAGE/backup"
+ROLLBACK_ARMED=0
+OLLAMA_SWAPPED=0
+RB_FAILS=()
+declare -A WAS_ACTIVE=() WAS_ENABLED=() WAS_FILE=()
+DEFAULT_WAS_ACTIVE=0
+DEFAULT_WAS_ENABLED=0
+DEFAULT_WAS_MASKED=0
+DEFAULT_WAS_FILE=0
+
+# rb DESCRIPTION CMD... - run one rollback step; remember it if it fails
+rb() {
+    local d="$1"
+    shift
+    "$@" || RB_FAILS+=("$d")
+}
+
+# restore_unit_file NAME - put the backed-up unit file back, atomically
+restore_unit_file() {
+    sudo install -m 0644 -o root -g root "$STAGE/backup/$1.service" "$UNIT_DIR/.$1.service.new" \
+        && sudo mv -f "$UNIT_DIR/.$1.service.new" "$UNIT_DIR/$1.service"
+}
+
+# unit_state_is NAME active|enabled|masked yes|no - compare the live state
+unit_state_is() {
+    local got=no
+    case "$2" in
+        active) systemctl is-active --quiet "$1.service" 2> /dev/null && got=yes ;;
+        enabled) [ "$(systemctl is-enabled "$1.service" 2> /dev/null || true)" = "enabled" ] && got=yes ;;
+        masked) [ "$(systemctl is-enabled "$1.service" 2> /dev/null || true)" = "masked" ] && got=yes ;;
+    esac
+    [ "$got" = "$3" ]
+}
+
+# unit_file_is_original NAME HAD_FILE - the unit file equals the backup, or is absent if there was none
+unit_file_is_original() {
+    if [ "$2" = "1" ]; then
+        sudo cmp -s "$STAGE/backup/$1.service" "$UNIT_DIR/$1.service"
+    else
+        ! sudo test -e "$UNIT_DIR/$1.service"
+    fi
+}
+
+yn() { if [ "$1" = "1" ]; then echo yes; else echo no; fi; }
+
+rollback_units() {
+    local u
+    for u in "${UNITS[@]}"; do
+        if sudo test -e "$UNIT_DIR/$u.service"; then
+            rb "stop $u" sudo systemctl stop "$u.service"
+            rb "disable $u" sudo systemctl disable "$u.service"
+        fi
+        if [ "${WAS_FILE[$u]}" = "1" ]; then
+            rb "restore the unit file of $u" restore_unit_file "$u"
+        else
+            rb "remove the new unit file of $u" sudo rm -f -- "${UNIT_DIR:?}/$u.service" "${UNIT_DIR:?}/.$u.service.new"
+        fi
+    done
+    if [ "$DEFAULT_WAS_FILE" = "1" ]; then
+        rb "restore the unit file of ollama.service" restore_unit_file ollama
+    fi
+    if [ "$DEFAULT_WAS_MASKED" -eq 0 ]; then
+        rb "unmask ollama.service" sudo systemctl unmask ollama.service
+    fi
+    rb "systemd daemon-reload" sudo systemctl daemon-reload
+    for u in "${UNITS[@]}"; do
+        if [ "${WAS_ENABLED[$u]}" = "1" ]; then rb "re-enable $u" sudo systemctl enable "$u.service"; fi
+        if [ "${WAS_ACTIVE[$u]}" = "1" ]; then rb "restart $u" sudo systemctl start "$u.service"; fi
+    done
+    if [ "$DEFAULT_WAS_ENABLED" -eq 1 ]; then rb "re-enable ollama.service" sudo systemctl enable ollama.service; fi
+    if [ "$DEFAULT_WAS_ACTIVE" -eq 1 ]; then rb "restart ollama.service" sudo systemctl start ollama.service; fi
+    # read back: unit files, enabled/masked state and active state
+    for u in "${UNITS[@]}"; do
+        unit_file_is_original "$u" "${WAS_FILE[$u]}" || RB_FAILS+=("read-back: unit file of $u differs from before")
+        unit_state_is "$u" enabled "$(yn "${WAS_ENABLED[$u]}")" || RB_FAILS+=("read-back: enabled state of $u differs from before")
+        unit_state_is "$u" active "$(yn "${WAS_ACTIVE[$u]}")" || RB_FAILS+=("read-back: active state of $u differs from before")
+    done
+    unit_file_is_original ollama "$DEFAULT_WAS_FILE" || RB_FAILS+=("read-back: unit file of ollama.service differs from before")
+    unit_state_is ollama masked "$(yn "$DEFAULT_WAS_MASKED")" || RB_FAILS+=("read-back: masked state of ollama.service differs from before")
+    unit_state_is ollama enabled "$(yn "$DEFAULT_WAS_ENABLED")" || RB_FAILS+=("read-back: enabled state of ollama.service differs from before")
+    unit_state_is ollama active "$(yn "$DEFAULT_WAS_ACTIVE")" || RB_FAILS+=("read-back: active state of ollama.service differs from before")
+}
+
+finish() {
+    local rc=$? did=0
+    trap - EXIT
+    set +e
+    if [ "$rc" -ne 0 ]; then
+        if [ "$OLLAMA_SWAPPED" -eq 1 ]; then
+            echo ""
+            echo "❌ Installation failed (exit $rc); restoring the previous Ollama files..."
+            did=1
+            rb "restore the previous Ollama files" franken_ollama_undo_restore /usr/local sudo
+        fi
+        if [ "$ROLLBACK_ARMED" -eq 1 ]; then
+            echo ""
+            echo "❌ Installation failed (exit $rc); restoring the previous service state..."
+            did=1
+            rollback_units
+        fi
+        if [ "${#RB_FAILS[@]}" -gt 0 ]; then
+            echo ""
+            echo "❌ ROLLBACK INCOMPLETE: the server may be in a mixed state. These steps failed:"
+            printf '   - %s\n' "${RB_FAILS[@]}"
+            echo "   Inspect: systemctl status ollama ollama-gpu0 ollama-gpu1; ls $UNIT_DIR/ollama*; ls /usr/local/.franken-ollama-undo"
+            rc=70
+        elif [ "$did" -eq 1 ]; then
+            echo "   Previous state restored and verified; see the error above."
+        fi
+    elif [ "$OLLAMA_SWAPPED" -eq 1 ]; then
+        franken_ollama_undo_discard /usr/local sudo || echo "⚠️  Could not remove /usr/local/.franken-ollama-undo (old Ollama backup); remove it by hand"
+    fi
+    rm -rf -- "${STAGE:?}"
+    exit "$rc"
+}
+trap finish EXIT
+
 # Service account: default is the invoking user. FRANKEN_SERVICE_USER names a
 # dedicated system account (nologin shell, home under /var/lib) that is created
 # when missing. An EXISTING account is adopted only when it already matches that
@@ -132,6 +269,7 @@ else
             exit 1
         fi
         echo "Installing Ollama $OLLAMA_PIN from the pinned release asset (sha256 checked before extraction)..."
+        OLLAMA_SWAPPED=1   # from here a failure restores the previous Ollama files
         franken_ollama_install_verified "$OLLAMA_PIN" "$OLLAMA_SHA256" "$OLLAMA_ASSET" /usr/local sudo
     elif [ "$ALLOW_UNVERIFIED_OLLAMA" = "true" ]; then
         franken_ollama_unverified_install "$OLLAMA_PIN"
@@ -198,65 +336,12 @@ fi
 #   4. only then retire the default service for good (disable, remove, mask)
 # Any failure after step 2 restores the prior state (trap on EXIT).
 # ---------------------------------------------------------------------------
-UNIT_DIR=/etc/systemd/system
 UNITS=(ollama-gpu0)
 PORTS=("$GPU0_PORT")
 if [ "$GPU_COUNT" -ge 2 ]; then
     UNITS+=(ollama-gpu1)
     PORTS+=("$GPU1_PORT")
 fi
-
-STAGE="$(mktemp -d)"
-mkdir -p "$STAGE/backup"
-ROLLBACK_ARMED=0
-
-declare -A WAS_ACTIVE=() WAS_ENABLED=() WAS_FILE=()
-DEFAULT_WAS_ACTIVE=0
-DEFAULT_WAS_ENABLED=0
-DEFAULT_WAS_MASKED=0
-DEFAULT_WAS_FILE=0
-
-# restore_unit_file NAME - put the backed-up unit file back, atomically
-restore_unit_file() {
-    sudo install -m 0644 -o root -g root "$STAGE/backup/$1.service" "$UNIT_DIR/.$1.service.new" \
-        && sudo mv -f "$UNIT_DIR/.$1.service.new" "$UNIT_DIR/$1.service"
-}
-
-finish() {
-    local rc=$? u
-    trap - EXIT
-    set +e
-    if [ "$ROLLBACK_ARMED" -eq 1 ] && [ "$rc" -ne 0 ]; then
-        echo ""
-        echo "❌ Installation failed (exit $rc); restoring the previous service state..."
-        for u in "${UNITS[@]}"; do
-            sudo systemctl stop "$u.service" 2> /dev/null
-            sudo systemctl disable "$u.service" 2> /dev/null
-            if [ "${WAS_FILE[$u]}" = "1" ]; then
-                restore_unit_file "$u"
-            else
-                sudo rm -f -- "${UNIT_DIR:?}/$u.service" "${UNIT_DIR:?}/.$u.service.new"
-            fi
-        done
-        if [ "$DEFAULT_WAS_FILE" = "1" ]; then
-            restore_unit_file ollama
-        fi
-        if [ "$DEFAULT_WAS_MASKED" -eq 0 ]; then
-            sudo systemctl unmask ollama.service 2> /dev/null
-        fi
-        sudo systemctl daemon-reload
-        for u in "${UNITS[@]}"; do
-            [ "${WAS_ENABLED[$u]}" = "1" ] && sudo systemctl enable "$u.service" 2> /dev/null
-            [ "${WAS_ACTIVE[$u]}" = "1" ] && sudo systemctl start "$u.service" 2> /dev/null
-        done
-        [ "$DEFAULT_WAS_ENABLED" -eq 1 ] && sudo systemctl enable ollama.service 2> /dev/null
-        [ "$DEFAULT_WAS_ACTIVE" -eq 1 ] && sudo systemctl start ollama.service 2> /dev/null
-        echo "   Previous state restored; see the error above."
-    fi
-    rm -rf -- "${STAGE:?}"
-    exit "$rc"
-}
-trap finish EXIT
 
 # 1. stage and verify
 echo "Staging systemd units..."
@@ -298,7 +383,9 @@ ROLLBACK_ARMED=1
 
 # 3. swap in the replacements and prove they work
 echo "Stopping the default ollama service (it uses port 11434)..."
-sudo systemctl stop ollama.service 2> /dev/null || true
+if [ "$DEFAULT_WAS_ACTIVE" -eq 1 ]; then
+    sudo systemctl stop ollama.service
+fi
 for u in "${UNITS[@]}"; do
     echo "Installing $u.service..."
     sudo install -m 0644 -o root -g root "$STAGE/$u.service" "$UNIT_DIR/.$u.service.new"
@@ -325,10 +412,16 @@ done
 # 4. the replacements work: retire the default service for good. Disable and MASK
 # it so Ollama updates can never start it again.
 echo "Disabling and masking default ollama service..."
-sudo systemctl disable ollama.service 2> /dev/null || true
+if [ "$DEFAULT_WAS_ENABLED" -eq 1 ]; then
+    sudo systemctl disable ollama.service
+fi
 sudo rm -f /etc/systemd/system/ollama.service
 sudo systemctl daemon-reload
-sudo systemctl mask ollama.service 2> /dev/null || true
+sudo systemctl mask ollama.service
+if [ "$(systemctl is-enabled ollama.service 2> /dev/null || true)" != "masked" ]; then
+    echo "❌ ollama.service is not masked after masking it; restoring the previous state"
+    exit 1
+fi
 ROLLBACK_ARMED=0
 echo "✅ Default ollama.service masked (permanently prevented from starting)"
 

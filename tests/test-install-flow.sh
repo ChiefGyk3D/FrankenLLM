@@ -40,7 +40,7 @@ mkdir -p "$TOOLS" "$STUB" "$WORK/home"
 
 # real tools the server script needs, by symlink (no ollama, no nvidia-smi, no real sudo)
 for t in bash sh cat cut grep egrep head tail wc seq tee mktemp rm mkdir install cp mv ln id getent stat sleep date \
-         tr sed awk sort dirname basename env uname tar sha256sum chmod touch ls readlink realpath zstd true false \
+         cmp tr sed awk sort dirname basename env uname tar sha256sum chmod touch ls readlink realpath zstd true false \
          expr test printf; do
     p="$(command -v "$t" 2> /dev/null || true)"
     case "$p" in /*) ln -sf "$p" "$TOOLS/$t" ;; esac
@@ -56,6 +56,12 @@ chmod +x "$WORK/art/bin/ollama"
 echo lib > "$WORK/art/lib/ollama/libfoo.so"
 tar -cf - -C "$WORK/art" bin lib | zstd -q -o "$WORK/good.tar.zst"
 GOOD_SHA="$(sha256sum "$WORK/good.tar.zst" | cut -d' ' -f1)"
+mkdir -p "$WORK/art2/bin" "$WORK/art2/lib/ollama"
+printf '#!/bin/sh\necho "ollama version is 9.9.9"\n' > "$WORK/art2/bin/ollama"
+chmod +x "$WORK/art2/bin/ollama"
+echo lib2 > "$WORK/art2/lib/ollama/libfoo.so"
+tar -cf - -C "$WORK/art2" bin lib | zstd -q -o "$WORK/wrongver.tar.zst"
+WRONGVER_SHA="$(sha256sum "$WORK/wrongver.tar.zst" | cut -d' ' -f1)"
 WRONG_SHA="$(printf 'b%.0s' $(seq 1 64))"
 
 # --- stubs -----------------------------------------------------------------------------------
@@ -75,7 +81,7 @@ for a in "$@"; do
     args+=("$a")
 done
 case "${args[0]}" in
-    mkdir|install|mv|tee|rm|tar|cp|chmod|test|systemctl|systemd-analyze) exec "${args[@]}" ;;
+    mkdir|install|mv|tee|rm|tar|cp|chmod|test|touch|cmp|systemctl|systemd-analyze) exec "${args[@]}" ;;
     useradd)
         echo "useradd ${args[*]}" >> "$STUB_LOG"
         name="${args[${#args[@]}-1]}"
@@ -95,14 +101,16 @@ cmd="${1:-}"; shift
 units=()
 for u in "$@"; do case "$u" in -*) ;; *) units+=("${u%.service}") ;; esac; done
 rc=0
+case " ${STUB_FAIL_CMDS:-} " in *" $cmd: "*) exit 1 ;; esac
 for u in "${units[@]}"; do
+    case " ${STUB_FAIL_CMDS:-} " in *" $cmd:$u "*) rc=1; continue ;; esac
     case "$cmd" in
         start|restart)
             if [ "$u" = "${STUB_FAIL_START:-}" ]; then rc=1; else touch "$STUB_STATE/active.$u"; fi ;;
         stop) rm -f "$STUB_STATE/active.$u" ;;
         enable) touch "$STUB_STATE/enabled.$u" ;;
         disable) rm -f "$STUB_STATE/enabled.$u" ;;
-        mask) touch "$STUB_STATE/masked.$u" ;;
+        mask) [ -n "${STUB_MASK_NOOP:-}" ] || touch "$STUB_STATE/masked.$u" ;;
         unmask) rm -f "$STUB_STATE/masked.$u" ;;
         is-active)
             if [ "$u" = "${STUB_FAIL_ACTIVE:-}" ] || [ ! -f "$STUB_STATE/active.$u" ]; then rc=3; fi ;;
@@ -133,6 +141,7 @@ while [ $# -gt 0 ]; do
         *) shift ;;
     esac
 done
+if [ "$out" = /dev/null ] && [ -n "${STUB_HEALTH_FAIL:-}" ]; then exit 22; fi
 if [ -z "$out" ] || [ "$out" = /dev/null ]; then exit 0; fi      # health probes and friends
 case "$url" in
     https://ollama.com/install.sh) printf '#!/bin/sh\necho upstream-script-ran >> "$STUB_LOG"\n' > "$out" ;;
@@ -175,8 +184,22 @@ STUB
 printf '#!/bin/sh\nexit 0\n' > "$STUB/sleep"
 chmod +x "$STUB"/*
 
+# the same stubs minus curl, for the "curl is not installed" cases
+STUBNC="$WORK/stub-nocurl"
+mkdir -p "$STUBNC"
+for f in "$STUB"/*; do
+    [ "$(basename "$f")" = curl ] || ln -s "$f" "$STUBNC/$(basename "$f")"
+done
+STUBDIR="$STUB"
+
 PAYLOAD="$WORK/payload.sh"
-{ echo '#!/bin/bash'; cat "$REPO/remote/unit-lib.sh" "$REPO/remote/server-install.sh"; } > "$PAYLOAD"
+{
+    echo '#!/bin/bash'
+    cat "$REPO/remote/unit-lib.sh"
+    # seam: the staged binary lives under the fake /usr/local
+    echo 'franken_ollama__staged_version() { franken_ollama_parse_version "$("$STUB_ROOT$1/bin/ollama" --version 2>&1 || true)"; }'
+    cat "$REPO/remote/server-install.sh"
+} > "$PAYLOAD"
 
 # run_server [VAR=value ...] -- ARGS...  -> RC, OUT, LOGTXT. Resets the fake root first.
 reset_root() {
@@ -190,7 +213,7 @@ run_server() {
     local -a envs=()
     while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
-    OUT=$(cd "$WORK/home" && env -i PATH="$STUB:$FAKE/usr/local/bin:$TOOLS" HOME="$WORK/home" USER=tester \
+    OUT=$(cd "$WORK/home" && env -i PATH="$STUBDIR:$FAKE/usr/local/bin:$TOOLS" HOME="$WORK/home" USER=tester \
         STUB_LOG="$WORK/calls.log" STUB_ROOT="$FAKE" STUB_STATE="$STATE" STUB_ARTIFACT="$WORK/good.tar.zst" \
         STUB_PASSWD="$WORK/stubdata/passwd" STUB_GROUPS="$WORK/stubdata/groups" \
         "${envs[@]}" bash "$PAYLOAD" "$@" 2>&1 < /dev/null)
@@ -407,6 +430,102 @@ mapfile -t U < <(args 11434 11435 "" newsvc)
 run_server -- "${U[@]}"
 check "missing account: created as a system nologin account" "yes" "$(grep -q '^sudo useradd --system --create-home --home-dir /var/lib/newsvc --shell /usr/sbin/nologin newsvc$' <<< "$LOGTXT" && echo yes || echo no)"
 check "missing account: units run as it" "User=newsvc" "$(grep '^User=' "$UNITDIR/ollama-gpu0.service")"
+
+echo "--- F9: rollback failures are reported ---"
+reset_root; seed_ollama; seed_default
+run_server STUB_FAIL_START=ollama-gpu1 -- "${A[@]}"
+check "rollback ok: says restored and verified" "yes" "$(grep -q 'restored and verified' <<< "$OUT" && echo yes || echo no)"
+check "rollback ok: not reported as incomplete" "no" "$(grep -q 'ROLLBACK INCOMPLETE' <<< "$OUT" && echo yes || echo no)"
+check "rollback ok: exit code is the install failure, not 70" "no" "$([ "$RC" -eq 70 ] && echo yes || echo no)"
+# the default service cannot be restarted during rollback
+reset_root; seed_ollama; seed_default
+run_server STUB_FAIL_START=ollama-gpu1 "STUB_FAIL_CMDS=start:ollama" -- "${A[@]}"
+check "rollback start fails: ROLLBACK INCOMPLETE" "yes" "$(grep -q 'ROLLBACK INCOMPLETE' <<< "$OUT" && echo yes || echo no)"
+check "rollback start fails: names the step" "yes" "$(grep -q 'restart ollama.service' <<< "$OUT" && echo yes || echo no)"
+check "rollback start fails: read-back notices the service is down" "yes" "$(grep -q 'read-back: active state of ollama.service' <<< "$OUT" && echo yes || echo no)"
+check "rollback start fails: never claims success" "no" "$(grep -q 'restored and verified' <<< "$OUT" && echo yes || echo no)"
+check "rollback start fails: exit 70" "70" "$RC"
+# unmask fails during rollback
+reset_root; seed_ollama; seed_default
+run_server STUB_FAIL_START=ollama-gpu1 "STUB_FAIL_CMDS=unmask:ollama" -- "${A[@]}"
+check "rollback unmask fails: ROLLBACK INCOMPLETE and exit 70" "yes 70" "$(grep -q 'unmask ollama.service' <<< "$OUT" && grep -q 'ROLLBACK INCOMPLETE' <<< "$OUT" && echo yes) $RC"
+# every daemon-reload fails (the install step and the rollback step)
+reset_root; seed_ollama; seed_default
+run_server "STUB_FAIL_CMDS=daemon-reload:" -- "${A[@]}"
+check "failing daemon-reload in rollback: listed, exit 70" "yes 70" "$(grep -q 'systemd daemon-reload' <<< "$OUT" && grep -q 'ROLLBACK INCOMPLETE' <<< "$OUT" && echo yes) $RC"
+
+echo "--- F10: the retired default service must really end up masked ---"
+reset_root; seed_ollama; seed_default
+run_server "STUB_FAIL_CMDS=mask:ollama" -- "${A[@]}"
+check "mask fails: install fails" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "mask fails: no success claim" "no" "$(grep -q 'masked (permanently' <<< "$OUT" && echo yes || echo no)"
+check "mask fails: rollback ran and verified" "yes" "$(grep -q 'restored and verified' <<< "$OUT" && echo yes || echo no)"
+check "mask fails: default back (file, active, enabled, not masked)" "yes yes yes no" "$([ -e "$UNITDIR/ollama.service" ] && echo yes || echo no) $(state_of active ollama) $(state_of enabled ollama) $(state_of masked ollama)"
+check "mask fails: replacements removed" "" "$(find "$UNITDIR" -mindepth 1 -maxdepth 1 ! -name ollama.service -printf '%f\n')"
+reset_root; seed_ollama; seed_default
+run_server "STUB_FAIL_CMDS=disable:ollama" -- "${A[@]}"
+check "disable fails: install fails and rolls back" "yes yes" "$([ "$RC" -ne 0 ] && echo yes || echo no) $(grep -q 'restored and verified' <<< "$OUT" && echo yes || echo no)"
+# mask reports success but the unit is not masked: the read-back stops it
+reset_root; seed_ollama; seed_default
+run_server STUB_MASK_NOOP=1 -- "${A[@]}"
+check "mask is a no-op: install fails (read-back)" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "mask is a no-op: says it is not masked" "yes" "$(grep -q 'is not masked' <<< "$OUT" && echo yes || echo no)"
+check "mask is a no-op: default restored and running" "yes yes" "$(state_of active ollama) $(state_of enabled ollama)"
+
+echo "--- F11: readiness needs curl ---"
+STUBDIR="$STUBNC"
+reset_root; seed_ollama; seed_default
+run_server -- "${A[@]}"
+STUBDIR="$STUB"
+check "no curl: install refuses" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "no curl: message" "yes" "$(grep -q 'curl is required' <<< "$OUT" && echo yes || echo no)"
+check "no curl: nothing mutated (no sudo at all)" "0" "$(grep -c '^sudo' <<< "$LOGTXT" || true)"
+check "no curl: default untouched" "yes yes no" "$(state_of active ollama) $(state_of enabled ollama) $(state_of masked ollama)"
+# the readiness function itself: active service, no curl, nothing answered
+check "readiness without curl fails (active but unprobed)" "1" "$( ( PATH="$TOOLS"; export STUB_LOG=/dev/null; systemctl() { return 0; }; franken_wait_unit_ready ollama-gpu0.service http://localhost:11434/api/tags 1; echo $? ) )"
+check "guard bites: with curl and an answer it passes" "0" "$( ( PATH="$STUB:$TOOLS"; export STUB_LOG=/dev/null; systemctl() { return 0; }; franken_wait_unit_ready ollama-gpu0.service http://localhost:11434/api/tags 1; echo $? ) )"
+# curl present but the service does not answer: the install rolls back
+reset_root; seed_ollama; seed_default
+run_server STUB_HEALTH_FAIL=1 -- "${A[@]}"
+check "active but unreachable: install fails" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "active but unreachable: default restored and running" "yes yes no" "$(state_of active ollama) $(state_of enabled ollama) $(state_of masked ollama)"
+
+echo "--- F12: the Ollama replacement is transactional ---"
+UNDO="$FAKE/usr/local/.franken-ollama-undo"
+seed_old_install() {  # an older Ollama: binary reporting 0.30.0 and a lib directory
+    mkdir -p "$FAKE/usr/local/bin" "$FAKE/usr/local/lib/ollama"
+    printf '#!/bin/sh\necho "ollama version is 0.30.0"\n' > "$FAKE/usr/local/bin/ollama"
+    chmod +x "$FAKE/usr/local/bin/ollama"
+    echo OLDLIB > "$FAKE/usr/local/lib/ollama/OLD"
+}
+# success: new files in place, backups dropped
+reset_root; seed_old_install; seed_default
+run_server -- "${C[@]}"
+check "swap ok: rc" "0" "$RC"
+check "swap ok: new lib, old lib gone" "lib no" "$(cat "$FAKE/usr/local/lib/ollama/libfoo.so" 2> /dev/null) $([ -e "$FAKE/usr/local/lib/ollama/OLD" ] && echo yes || echo no)"
+check "swap ok: new binary" "0.33.2" "$("$FAKE/usr/local/bin/ollama" --version | grep -o '[0-9.]*$')"
+check "swap ok: backup area removed" "no" "$([ -e "$UNDO" ] && echo yes || echo no)"
+# a later installer failure (replacement service will not start): old Ollama comes back
+reset_root; seed_old_install; seed_default
+run_server STUB_FAIL_START=ollama-gpu1 -- "${C[@]}"
+check "late failure: install fails" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "late failure: old binary back" "0.30.0" "$("$FAKE/usr/local/bin/ollama" --version | grep -o '[0-9.]*$')"
+check "late failure: old lib back, new lib gone" "OLDLIB no" "$(cat "$FAKE/usr/local/lib/ollama/OLD" 2> /dev/null) $([ -e "$FAKE/usr/local/lib/ollama/libfoo.so" ] && echo yes || echo no)"
+check "late failure: backup area removed" "no" "$([ -e "$UNDO" ] && echo yes || echo no)"
+check "late failure: services restored too" "yes yes no" "$(state_of active ollama) $(state_of enabled ollama) $(state_of masked ollama)"
+# a fresh install (nothing before) that fails later leaves no Ollama files behind
+reset_root; seed_default
+run_server STUB_FAIL_START=ollama-gpu1 -- "${C[@]}"
+check "late failure, fresh install: no new files left" "no no" "$([ -e "$FAKE/usr/local/bin/ollama" ] && echo yes || echo no) $([ -e "$FAKE/usr/local/lib/ollama" ] && echo yes || echo no)"
+# the staged release reports another version than the pin: refused, old install intact
+reset_root; seed_old_install; seed_default
+mapfile -t W < <(args 11434 11435 "" "" "" "" 0.33.2 "" "$WRONGVER_SHA" ollama-linux-amd64.tar.zst)
+run_server STUB_ARTIFACT="$WORK/wrongver.tar.zst" -- "${W[@]}"
+check "wrong staged version: refused" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "wrong staged version: message" "yes" "$(grep -q 'expected layout or version' <<< "$OUT" && echo yes || echo no)"
+check "wrong staged version: old install intact" "0.30.0 OLDLIB" "$("$FAKE/usr/local/bin/ollama" --version | grep -o '[0-9.]*$') $(cat "$FAKE/usr/local/lib/ollama/OLD")"
+check "wrong staged version: staging removed" "no" "$([ -e "$UNDO" ] && echo yes || echo no)"
+check "wrong staged version: services untouched" "0" "$(grep -c '^sudo systemctl' <<< "$LOGTXT" || true)"
 
 check "repo root has no untracked files" "" "$(git -C "$REPO" status --porcelain --untracked-files=all 2>/dev/null | grep '^??' | grep -v 'tests/test-\|ollama-checksums')"
 

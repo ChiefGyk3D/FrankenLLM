@@ -195,7 +195,18 @@ installed by atomic rename, started, and health-checked (the unit is active and
 disabled, its unit file removed and masked. If any step after the staging fails, the
 installer restores the earlier unit files and the earlier active, enabled and masked
 state of `ollama.service`, `ollama-gpu0` and `ollama-gpu1`. A system account created
-earlier in the same run is kept. Covered by `tests/test-install-flow.sh`.
+earlier in the same run is kept. Every restoration step is checked and the result is
+read back (unit files, enabled, masked and active state); success is reported only
+when all of it matches, otherwise the installer prints `ROLLBACK INCOMPLETE`, lists
+the steps that failed and exits 70. The default service is only retired when
+`systemctl is-enabled` reads back `masked` (a failing disable or mask rolls back).
+`curl` must be installed on the server: it is the readiness probe, and without it
+the install stops before anything is changed. The verified Ollama files are
+extracted into a staging directory under `/usr/local`, validated (layout and
+reported version), and moved into place as whole directories; the old ones are kept
+in `/usr/local/.franken-ollama-undo` and put back on any later failure. A late tar
+or disk error leaves the previous install intact. Covered by `tests/test-install-flow.sh`
+and `tests/test-ollama-verify.sh`.
 
 `FRANKEN_REQUIRE_GPU=true` adds `ExecStartPre=<absolute path of nvidia-smi> -L` before
 `ExecStart` in each unit. If the NVIDIA driver fails to load (for example after a

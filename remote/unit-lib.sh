@@ -158,11 +158,15 @@ franken_ollama_download() {
 
 # franken_ollama_install_verified VERSION SHA256 ASSET ROOT [PRIVILEGE_CMD...]
 # Downloads the pinned release asset, verifies its sha256 BEFORE anything is
-# decompressed or extracted, checks the archive member names, and only then
-# replaces ROOT/lib/ollama and extracts into ROOT (the layout of the upstream
-# installer: ROOT/bin/ollama and ROOT/lib/ollama). PRIVILEGE_CMD (e.g. sudo) is
-# put in front of the commands that write under ROOT. No account or service is
-# created. Needs curl, zstd, tar and sha256sum; says so when one is missing.
+# decompressed or extracted, checks the archive member names, extracts into a
+# staging directory under ROOT, validates the staged layout and version, and only
+# then moves the complete lib/ollama directory and bin/ollama into place (the
+# layout of the upstream installer), keeping the old ones in ROOT/.franken-ollama-undo.
+# The caller ends with franken_ollama_undo_discard (success) or
+# franken_ollama_undo_restore (a later failure). A failure inside this function
+# restores the previous install itself. PRIVILEGE_CMD (e.g. sudo) is put in front
+# of the commands that write under ROOT. No account or service is created.
+# Needs curl, zstd, tar and sha256sum; says so when one is missing.
 franken_ollama_install_verified() {
     local version="$1" sha="$2" asset="$3" root="$4" url tool
     shift 4
@@ -181,32 +185,118 @@ franken_ollama_install_verified() {
         echo "   Install it first (Debian/Ubuntu: sudo apt-get install zstd; Fedora/RHEL: sudo dnf install zstd)."
         return 1
     fi
-    (
-        work="$(mktemp -d)" || exit 1
-        trap 'rm -rf -- "$work"' EXIT
-        echo "Downloading $url"
-        franken_ollama_download "$url" "$work/$asset" || { echo "❌ Download failed"; exit 1; }
-        actual="$(franken_sha256_file "$work/$asset")"
-        if [ "$actual" != "$sha" ]; then
-            echo "❌ Checksum mismatch for $asset: expected $sha, got $actual. Nothing was extracted."
-            exit 1
+    local work undo stage staged_version i
+    local -a names=(lib bin) targets staged
+    work="$(mktemp -d)" || return 1
+    if ! franken_ollama__fetch_verify "$url" "$asset" "$sha" "$work"; then
+        rm -rf -- "${work:?}"
+        return 1
+    fi
+    # Extract into a staging directory under ROOT (same filesystem, so the final
+    # moves are renames). The live install is not touched until the staged tree
+    # has been validated; the old files are moved aside, not deleted.
+    undo="$root/.franken-ollama-undo"
+    stage="$undo/stage"
+    ${priv[@]+"${priv[@]}"} rm -rf -- "$undo" || { rm -rf -- "${work:?}"; return 1; }
+    if ! ${priv[@]+"${priv[@]}"} install -d -m 0755 "$undo" "$stage" "$undo/backup" "$root/bin" "$root/lib"; then
+        rm -rf -- "${work:?}"
+        franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"} > /dev/null
+        return 1
+    fi
+    if ! ${priv[@]+"${priv[@]}"} tar -xf "$work/ollama.tar" -C "$stage" --no-same-owner; then
+        echo "❌ Extraction failed; the previous Ollama install was not touched"
+        rm -rf -- "${work:?}"
+        franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"} > /dev/null
+        return 1
+    fi
+    rm -rf -- "${work:?}"
+    staged_version=""
+    if ${priv[@]+"${priv[@]}"} test -x "$stage/bin/ollama" && ${priv[@]+"${priv[@]}"} test -d "$stage/lib/ollama"; then
+        staged_version="$(franken_ollama__staged_version "$stage")"
+    fi
+    if [ "$staged_version" != "$version" ]; then
+        echo "❌ The staged release does not have the expected layout or version (wanted $version, got '${staged_version:-none}'); the previous install was not touched"
+        franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"} > /dev/null
+        return 1
+    fi
+    # Swap complete directories and files into place, keeping the old ones.
+    targets=("$root/lib/ollama" "$root/bin/ollama")
+    staged=("$stage/lib/ollama" "$stage/bin/ollama")
+    for i in 0 1; do
+        if ${priv[@]+"${priv[@]}"} test -e "${targets[$i]}" || ${priv[@]+"${priv[@]}"} test -L "${targets[$i]}"; then
+            ${priv[@]+"${priv[@]}"} mv -- "${targets[$i]}" "$undo/backup/${names[$i]}" || { echo "❌ Could not move the old ${names[$i]} aside"; franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"}; return 1; }
         fi
-        echo "✅ sha256 verified for $asset"
-        zstd -d -q -c -- "$work/$asset" > "$work/ollama.tar" || { echo "❌ Could not decompress the archive"; exit 1; }
-        # Member names must stay under ROOT; links must not point outside; no devices.
-        names="$(tar -tf "$work/ollama.tar")" || { echo "❌ Could not read the archive"; exit 1; }
-        if grep -qE '(^/|(^|/)\.\.(/|$))' <<< "$names"; then
-            echo "❌ The archive has absolute or parent-directory member names; refusing to extract"
-            exit 1
+        ${priv[@]+"${priv[@]}"} touch "$undo/new-${names[$i]}" || { franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"}; return 1; }
+        ${priv[@]+"${priv[@]}"} mv -- "${staged[$i]}" "${targets[$i]}" || { echo "❌ Could not move the new ${names[$i]} into place"; franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"}; return 1; }
+    done
+    echo "✅ Ollama $version staged, validated and moved into place (previous files kept until the install finishes)"
+    return 0
+}
+
+# franken_ollama__staged_version STAGE_DIR - version the staged binary reports (a seam
+# the tests override; the binary is the checksum-verified one).
+franken_ollama__staged_version() {
+    franken_ollama_parse_version "$("$1/bin/ollama" --version 2>&1 || true)"
+}
+
+# franken_ollama__fetch_verify URL ASSET SHA WORKDIR - download, check the sha256,
+# decompress and check the member names into WORKDIR/ollama.tar. Touches nothing else.
+franken_ollama__fetch_verify() (
+    url="$1" asset="$2" sha="$3" work="$4"
+    echo "Downloading $url"
+    franken_ollama_download "$url" "$work/$asset" || { echo "❌ Download failed"; exit 1; }
+    actual="$(franken_sha256_file "$work/$asset")"
+    if [ "$actual" != "$sha" ]; then
+        echo "❌ Checksum mismatch for $asset: expected $sha, got $actual. Nothing was extracted."
+        exit 1
+    fi
+    echo "✅ sha256 verified for $asset"
+    zstd -d -q -c -- "$work/$asset" > "$work/ollama.tar" || { echo "❌ Could not decompress the archive"; exit 1; }
+    # Member names must stay under the root; links must not point outside; no devices.
+    members="$(tar -tf "$work/ollama.tar")" || { echo "❌ Could not read the archive"; exit 1; }
+    if grep -qE '(^/|(^|/)\.\.(/|$))' <<< "$members"; then
+        echo "❌ The archive has absolute or parent-directory member names; refusing to extract"
+        exit 1
+    fi
+    if tar -tvf "$work/ollama.tar" | grep -E -q '^[cbp]|( -> | link to )(/|(.*/)?\.\.(/|$))'; then
+        echo "❌ The archive has device nodes or links leaving the install root; refusing to extract"
+        exit 1
+    fi
+)
+
+# franken_ollama_undo_restore ROOT [PRIVILEGE_CMD...] - put the previous Ollama
+# files back after a failed or abandoned replacement and remove the staging area.
+# Idempotent; does nothing when there is nothing to undo. Returns 1 if any step fails.
+franken_ollama_undo_restore() {
+    local root="$1" undo rc=0 i
+    shift
+    local -a priv=("$@") names=(lib bin) targets
+    undo="$root/.franken-ollama-undo"
+    ${priv[@]+"${priv[@]}"} test -d "$undo" || return 0
+    targets=("$root/lib/ollama" "$root/bin/ollama")
+    for i in 0 1; do
+        # the new item was moved into place: remove it
+        if ${priv[@]+"${priv[@]}"} test -e "$undo/new-${names[$i]}" \
+            && ! ${priv[@]+"${priv[@]}"} test -e "$undo/stage/${targets[$i]#"$root/"}"; then
+            ${priv[@]+"${priv[@]}"} rm -rf -- "${targets[$i]}" || rc=1
         fi
-        if tar -tvf "$work/ollama.tar" | grep -E -q '^[cbp]|( -> | link to )(/|(.*/)?\.\.(/|$))'; then
-            echo "❌ The archive has device nodes or links leaving the install root; refusing to extract"
-            exit 1
+        if ${priv[@]+"${priv[@]}"} test -e "$undo/backup/${names[$i]}" \
+            && ! ${priv[@]+"${priv[@]}"} test -e "${targets[$i]}"; then
+            ${priv[@]+"${priv[@]}"} mv -- "$undo/backup/${names[$i]}" "${targets[$i]}" || rc=1
         fi
-        ${priv[@]+"${priv[@]}"} rm -rf -- "$root/lib/ollama" || exit 1
-        ${priv[@]+"${priv[@]}"} install -d -m 0755 "$root/bin" "$root/lib/ollama" || exit 1
-        ${priv[@]+"${priv[@]}"} tar -xf "$work/ollama.tar" -C "$root" --no-same-owner || { echo "❌ Extraction failed"; exit 1; }
-    )
+    done
+    if [ "$rc" -eq 0 ]; then
+        ${priv[@]+"${priv[@]}"} rm -rf -- "$undo" || rc=1
+    fi
+    return "$rc"
+}
+
+# franken_ollama_undo_discard ROOT [PRIVILEGE_CMD...] - the install succeeded:
+# drop the backups and the staging area.
+franken_ollama_undo_discard() {
+    local root="$1"
+    shift
+    ${@+"$@"} rm -rf -- "$root/.franken-ollama-undo"
 }
 
 # franken_ollama_unverified_install [VERSION] - the old behavior, only for an
@@ -372,18 +462,18 @@ franken_check_service_account() {
     return 0
 }
 
-# franken_wait_unit_ready UNIT URL TRIES - 0 once UNIT is active and, when curl
-# exists, URL answers; polls up to TRIES times, two seconds apart.
+# franken_wait_unit_ready UNIT URL TRIES - 0 once UNIT is active AND URL answers
+# (curl is required; without it this fails); polls up to TRIES times, 2 s apart.
 franken_wait_unit_ready() {
     local unit="$1" url="$2" tries="$3" i
+    # No curl means no proof the service answers: that is a failure, never a pass.
+    command -v curl > /dev/null 2>&1 || return 1
     for ((i = 0; i < tries; i++)); do
-        if systemctl is-active --quiet "$unit"; then
-            if ! command -v curl > /dev/null 2>&1 \
-                || curl --fail --silent --max-time 3 --output /dev/null -- "$url"; then
-                return 0
-            fi
+        if systemctl is-active --quiet "$unit" \
+            && curl --fail --silent --max-time 3 --output /dev/null -- "$url"; then
+            return 0
         fi
-        sleep 2
+        if [ "$i" -lt $((tries - 1)) ]; then sleep 2; fi
     done
     return 1
 }
