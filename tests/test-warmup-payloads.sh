@@ -263,4 +263,8 @@ PIN_RC=$?
 bash "$REPO/tests/test-model-host.sh"
 HOST_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ]
+# --- 16. Watchdog test (scratch dir only; no files left in the repo) ----------
+bash "$REPO/tests/test-watchdog.sh"
+WATCHDOG_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$WATCHDOG_RC" -eq 0 ]
