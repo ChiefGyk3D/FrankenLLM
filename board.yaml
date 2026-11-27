@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The project board for this repository, defined as code for Scrum Around and Find Out (SAFO).
+# A user-owned GitHub Project: no App can write one, so it is kept current from the maintainer's own
+# `gh` login with `safo --board board.yaml reconcile` (no token is stored in CI).
+version: 1
+project:
+  owner: ChiefGyk3D
+  owner_type: user
+  number: 21
+  title: frankenllm
+repositories:
+  - owner: ChiefGyk3D
+    name: FrankenLLM
+    default_area: Foundation
+    area_rules:
+      - {match: docker, area: "Deployment"}
+      - {match: compose, area: "Deployment"}
+      - {match: security, area: "Security"}
+      - {match: docs, area: "Docs"}
+fields:
+  - name: Status
+    type: single_select
+    options:
+      - {name: Backlog, color: GRAY, description: "Not scheduled"}
+      - {name: Next, color: BLUE, description: "Scheduled for a sprint"}
+      - {name: In progress, color: YELLOW, description: "Being worked, or a draft pull request"}
+      - {name: In review, color: PURPLE, description: "Pull request open, checks and reviews running"}
+      - {name: Blocked, color: RED, description: "Needs the maintainer or an outside answer"}
+      - {name: Done, color: GREEN, description: "Closed or merged"}
+  - name: Area
+    type: single_select
+    options:
+      - {name: Foundation, color: GRAY, description: "Core project work"}
+      - {name: Deployment, color: GREEN, description: "Containers, compose, install"}
+      - {name: Security, color: ORANGE, description: "Scanner findings and hardening"}
+      - {name: Docs, color: BLUE, description: "Documentation"}
+  - name: Kind
+    type: single_select
+    options:
+      - {name: Task, color: GRAY, description: ""}
+      - {name: Feature, color: GRAY, description: ""}
+      - {name: Bug, color: GRAY, description: ""}
+      - {name: Chore, color: GRAY, description: ""}
+      - {name: Docs, color: GRAY, description: ""}
+      - {name: Epic, color: PURPLE, description: "A parent issue with sub-issues"}
+  - name: Priority
+    type: single_select
+    options:
+      - {name: P1 soon, color: ORANGE, description: ""}
+      - {name: P2 later, color: YELLOW, description: ""}
+      - {name: P3 someday, color: GRAY, description: ""}
+  - name: Effort
+    type: single_select
+    options:
+      - {name: S, color: GRAY, description: "About 2 hours"}
+      - {name: M, color: BLUE, description: "About 5 hours"}
+      - {name: L, color: ORANGE, description: "About 12 hours"}
+      - {name: XL, color: RED, description: "About 30 hours: split before scheduling"}
+  - name: Epic
+    type: single_select
+    options:
+      - {name: FrankenLLM board, color: GRAY, description: ""}
+  - name: Agent
+    type: single_select
+    options:
+      - {name: Claude, color: ORANGE, description: "Claude lead or a Claude subagent"}
+      - {name: Codex, color: GREEN, description: "OpenAI Codex"}
+      - {name: Copilot, color: BLUE, description: "GitHub Copilot coding agent"}
+      - {name: You, color: PURPLE, description: "The maintainer"}
+  - {name: Done on, type: date}
+views:
+  - {name: Board, layout: board, filter: "-status:Done"}
+  - {name: Backlog, layout: table, filter: "status:Backlog"}
+rules:
+  status:
+    opened: Backlog
+    opened_pr: In review
+    draft_pr: In progress
+    reopened: Backlog
+    closed: Done
+    merged: Done
+  done_date_field: Done on
+  new_item_defaults:
+    Priority: P2 later
+agents:
+  field: Agent
+  working: [In progress, In review, Next]
+  waiting: [Blocked]
+ui_only:
+  - "Board view: Group by = Status"
+  - "Project workflows: Item closed -> Done; Pull request merged -> Done"
