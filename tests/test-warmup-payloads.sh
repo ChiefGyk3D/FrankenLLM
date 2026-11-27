@@ -255,4 +255,8 @@ echo "passed: $PASS  failed: $FAIL"
 bash "$REPO/tests/test-unit-render.sh"
 UNIT_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ]
+# --- 14. Ollama version pin test ----------------------------------------------
+bash "$REPO/tests/test-ollama-pin.sh"
+PIN_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ]

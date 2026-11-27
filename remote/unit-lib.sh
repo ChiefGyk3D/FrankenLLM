@@ -55,6 +55,32 @@ franken_valid_tasks_max() {
     [[ "$1" =~ ^[1-9][0-9]*$ || "$1" == "infinity" ]]
 }
 
+# franken_valid_ollama_version VALUE - X.Y.Z with optional -rcN (e.g. 0.33.2, 0.34.0-rc1).
+franken_valid_ollama_version() {
+    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]
+}
+
+# franken_ollama_fetch_cmd [VERSION] - prints the command line that fetches and
+# runs the upstream installer; nothing is executed here. A non-empty VERSION
+# (validated, else return 1) is set as OLLAMA_VERSION for the piped shell.
+# The upstream script has no checksum step: a pin gives a reproducible version,
+# not integrity.
+franken_ollama_fetch_cmd() {
+    local url="https://ollama.com/install.sh"
+    if [ -z "${1:-}" ]; then
+        printf 'curl -fsSL %s | sh\n' "$url"
+        return 0
+    fi
+    franken_valid_ollama_version "$1" || return 1
+    printf 'curl -fsSL %s | OLLAMA_VERSION=%s sh\n' "$url" "$1"
+}
+
+# franken_ollama_parse_version TEXT - first X.Y.Z[-rcN] in `ollama --version`
+# output (which may carry warning lines); empty when none.
+franken_ollama_parse_version() {
+    grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' <<< "$1" | head -n 1
+}
+
 # franken_render_unit GPU PORT MODELS_DIR USER BIND MEMORY_MAX TASKS_MAX
 # Prints the unit text. Empty BIND means all interfaces (0.0.0.0); empty
 # MEMORY_MAX / TASKS_MAX write no limit line. Callers validate first.

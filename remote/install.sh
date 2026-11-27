@@ -35,6 +35,7 @@ FRANKEN_BIND_ADDR="${FRANKEN_BIND_ADDR:-}"
 FRANKEN_SERVICE_USER="${FRANKEN_SERVICE_USER:-}"
 FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
 FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
+FRANKEN_OLLAMA_VERSION="${FRANKEN_OLLAMA_VERSION:-}"
 if [ -n "$FRANKEN_BIND_ADDR" ] && ! franken_valid_bind_addr "$FRANKEN_BIND_ADDR"; then
     echo "❌ FRANKEN_BIND_ADDR must be an IPv4 address (e.g. 192.0.2.10)"
     exit 1
@@ -50,6 +51,14 @@ fi
 if [ -n "$FRANKEN_TASKS_MAX" ] && ! franken_valid_tasks_max "$FRANKEN_TASKS_MAX"; then
     echo "❌ FRANKEN_TASKS_MAX must be a positive integer or infinity"
     exit 1
+fi
+if [ -n "$FRANKEN_OLLAMA_VERSION" ] && ! franken_valid_ollama_version "$FRANKEN_OLLAMA_VERSION"; then
+    echo "❌ FRANKEN_OLLAMA_VERSION must look like 0.33.2 or 0.34.0-rc1"
+    exit 1
+fi
+if [ -z "$FRANKEN_OLLAMA_VERSION" ]; then
+    echo "⚠️  Ollama install is unpinned: the latest upstream version will be used."
+    echo "   Set FRANKEN_OLLAMA_VERSION (e.g. 0.33.2) to pin it."
 fi
 
 echo "Press Ctrl+C to cancel, or Enter to continue..."
@@ -79,6 +88,7 @@ BIND_ADDR="${3:-}"
 SERVICE_USER="${4:-}"
 MEMORY_MAX="${5:-}"
 TASKS_MAX="${6:-}"
+OLLAMA_PIN="${7:-}"
 
 # --- unit-lib.sh is appended here by remote/install.sh ---
 ENDSCRIPT
@@ -86,7 +96,8 @@ cat "$SCRIPT_DIR/unit-lib.sh" >> /tmp/frankenllm-remote-install.sh
 cat >> /tmp/frankenllm-remote-install.sh << 'ENDSCRIPT'
 
 for v in "$BIND_ADDR:franken_valid_bind_addr" "$SERVICE_USER:franken_valid_service_user" \
-         "$MEMORY_MAX:franken_valid_memory_max" "$TASKS_MAX:franken_valid_tasks_max"; do
+         "$MEMORY_MAX:franken_valid_memory_max" "$TASKS_MAX:franken_valid_tasks_max" \
+         "$OLLAMA_PIN:franken_valid_ollama_version"; do
     if [ -n "${v%%:*}" ] && ! "${v##*:}" "${v%%:*}"; then
         echo "❌ Invalid value for ${v##*:}"
         exit 1
@@ -125,11 +136,26 @@ fi
 
 # Install Ollama
 echo "Installing Ollama..."
+# An existing install is kept unless a pin is set and it differs.
+INSTALLED_VERSION=""
 if command -v ollama &> /dev/null; then
+    INSTALLED_VERSION="$(franken_ollama_parse_version "$(ollama --version 2>&1 || true)")"
+fi
+if [ -n "$INSTALLED_VERSION" ] && { [ -z "$OLLAMA_PIN" ] || [ "$INSTALLED_VERSION" = "$OLLAMA_PIN" ]; }; then
     echo "✅ Ollama already installed"
 else
-    curl -fsSL https://ollama.com/install.sh | sh
+    if [ -z "$OLLAMA_PIN" ]; then
+        echo "⚠️  Ollama install is unpinned (set FRANKEN_OLLAMA_VERSION to pin it)"
+    fi
+    # The command is built from a validated version only (checked above).
+    eval "$(franken_ollama_fetch_cmd "$OLLAMA_PIN")"
     echo "✅ Ollama installed"
+fi
+FINAL_VERSION="$(franken_ollama_parse_version "$(ollama --version 2>&1 || true)")"
+echo "Ollama version: ${FINAL_VERSION:-unknown}"
+if [ -n "$OLLAMA_PIN" ] && [ "$FINAL_VERSION" != "$OLLAMA_PIN" ]; then
+    echo "❌ Pinned Ollama $OLLAMA_PIN but the installed version is ${FINAL_VERSION:-unknown}"
+    exit 1
 fi
 echo ""
 
@@ -234,7 +260,7 @@ echo "Connecting to $FRANKEN_SERVER_IP and running installation..."
 echo "You will be prompted for sudo password on the remote server."
 echo ""
 
-ssh -t "$FRANKEN_SERVER_IP" "bash /tmp/frankenllm-remote-install.sh $FRANKEN_GPU0_PORT $FRANKEN_GPU1_PORT '$FRANKEN_BIND_ADDR' '$FRANKEN_SERVICE_USER' '$FRANKEN_MEMORY_MAX' '$FRANKEN_TASKS_MAX' && rm /tmp/frankenllm-remote-install.sh"
+ssh -t "$FRANKEN_SERVER_IP" "bash /tmp/frankenllm-remote-install.sh $FRANKEN_GPU0_PORT $FRANKEN_GPU1_PORT '$FRANKEN_BIND_ADDR' '$FRANKEN_SERVICE_USER' '$FRANKEN_MEMORY_MAX' '$FRANKEN_TASKS_MAX' '$FRANKEN_OLLAMA_VERSION' && rm /tmp/frankenllm-remote-install.sh"
 
 # Cleanup local temp file
 rm /tmp/frankenllm-remote-install.sh

@@ -96,10 +96,16 @@ export FRANKEN_GPU1_WARMUP_TIMEOUT="${FRANKEN_GPU1_WARMUP_TIMEOUT:-120}"
 # FRANKEN_MEMORY_MAX  systemd MemoryMax for each unit (e.g. 24G, 512M, infinity).
 # FRANKEN_TASKS_MAX   systemd TasksMax for each unit (e.g. 512, infinity).
 # Unset or empty MemoryMax/TasksMax writes no line. See docs/CONFIGURATION.md.
+# FRANKEN_OLLAMA_VERSION  Pin the Ollama version the remote install fetches, as
+#                     X.Y.Z or X.Y.Z-rcN (e.g. 0.33.2); passed to the upstream
+#                     installer as OLLAMA_VERSION and checked after install.
+#                     Unset = latest, with a warning. The upstream script has no
+#                     checksum step: a pin is reproducible, not integrity-checked.
 export FRANKEN_BIND_ADDR="${FRANKEN_BIND_ADDR:-}"
 export FRANKEN_SERVICE_USER="${FRANKEN_SERVICE_USER:-}"
 export FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
 export FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
+export FRANKEN_OLLAMA_VERSION="${FRANKEN_OLLAMA_VERSION:-}"
 
 # Detect if we're installing locally or remotely
 if [[ "$FRANKEN_SERVER_IP" == "localhost" || "$FRANKEN_SERVER_IP" == "127.0.0.1" ]]; then
