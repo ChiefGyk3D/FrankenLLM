@@ -5,6 +5,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
+source "$SCRIPT_DIR/../remote/unit-lib.sh"
+MODEL_HOST="$(franken_model_host 127.0.0.1 "$FRANKEN_BIND_ADDR")"
 
 # Colors
 RED='\033[0;31m'
@@ -65,9 +67,9 @@ list_models_on_gpu() {
     
     echo -e "${CYAN}GPU $gpu ($name) - Port $port:${NC}"
     if [ "$FRANKEN_IS_LOCAL" = true ]; then
-        OLLAMA_HOST="127.0.0.1:$port" ollama list 2>/dev/null || echo "  (no models or service not running)"
+        OLLAMA_HOST="$MODEL_HOST:$port" ollama list 2>/dev/null || echo "  (no models or service not running)"
     else
-        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=127.0.0.1:$port ollama list 2>/dev/null" || echo "  (no models or service not running)"
+        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=$MODEL_HOST:$port ollama list 2>/dev/null" || echo "  (no models or service not running)"
     fi
     echo ""
 }
@@ -83,9 +85,9 @@ pull_model_to_gpu() {
     echo ""
     
     if [ "$FRANKEN_IS_LOCAL" = true ]; then
-        OLLAMA_HOST="127.0.0.1:$port" ollama pull "$model"
+        OLLAMA_HOST="$MODEL_HOST:$port" ollama pull "$model"
     else
-        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=127.0.0.1:$port ollama pull '$model'"
+        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=$MODEL_HOST:$port ollama pull '$model'"
     fi
     
     if [ $? -eq 0 ]; then
@@ -109,9 +111,9 @@ remove_model_from_gpu() {
     echo -e "${YELLOW}🗑️  Removing $model from GPU $gpu ($name)...${NC}"
     
     if [ "$FRANKEN_IS_LOCAL" = true ]; then
-        OLLAMA_HOST="127.0.0.1:$port" ollama rm "$model"
+        OLLAMA_HOST="$MODEL_HOST:$port" ollama rm "$model"
     else
-        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=127.0.0.1:$port ollama rm '$model'"
+        ssh "$FRANKEN_SERVER_IP" "OLLAMA_HOST=$MODEL_HOST:$port ollama rm '$model'"
     fi
     
     if [ $? -eq 0 ]; then
