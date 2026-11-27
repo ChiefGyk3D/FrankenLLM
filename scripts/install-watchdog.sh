@@ -20,8 +20,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="/usr/local/lib/frankenllm"
 ENV_FILE="/etc/frankenllm/watchdog.env"
 
+# The effective uid; a function so the test suite can stub it.
+current_uid() { id -u; }
+
+# The test seam (WATCHDOG_TESTING, WATCHDOG_ENV_FILE, WATCHDOG_INSTALLED_LIB) is
+# honored only for a NON-root user. As root this script is a privilege boundary
+# and an ambient variable must never redirect what it reads or sources.
+testing_seam_ok() {
+    [ "${WATCHDOG_TESTING:-}" = "1" ] && [ "$(current_uid)" -ne 0 ]
+}
+
 need_root() {
-    if [ "$(id -u)" -ne 0 ]; then
+    if [ "$(current_uid)" -ne 0 ]; then
         echo "Run this as root:  sudo $0 $1" >&2
         exit 1
     fi
@@ -73,8 +83,8 @@ cmd_uninstall() {
 }
 
 cmd_test() {
-    # The test suite points this at scratch files; it cannot run as root there.
-    if [ "${WATCHDOG_TESTING:-}" = "1" ]; then
+    # The test suite points this at scratch files, as a non-root user only.
+    if testing_seam_ok; then
         ENV_FILE="${WATCHDOG_ENV_FILE:-$ENV_FILE}"
         LIB_DIR="${WATCHDOG_INSTALLED_LIB:-$LIB_DIR}"
     else
@@ -120,12 +130,15 @@ cmd_unhold() {
     apt-mark unhold "${pkgs[@]}"
 }
 
-case "${1:-}" in
-    install) cmd_install ;;
-    uninstall) cmd_uninstall ;;
-    test) cmd_test ;;
-    status) cmd_status ;;
-    hold-nvidia) cmd_hold ;;
-    unhold-nvidia) cmd_unhold ;;
-    *) sed -n '5,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
-esac
+# Dispatch only when run, not when sourced (the tests source it to stub the uid).
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    case "${1:-}" in
+        install) cmd_install ;;
+        uninstall) cmd_uninstall ;;
+        test) cmd_test ;;
+        status) cmd_status ;;
+        hold-nvidia) cmd_hold ;;
+        unhold-nvidia) cmd_unhold ;;
+        *) sed -n '5,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    esac
+fi

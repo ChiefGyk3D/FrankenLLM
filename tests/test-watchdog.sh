@@ -7,12 +7,33 @@
 #
 # Usage: tests/test-watchdog.sh
 
-set -u
+# Setup is strict (-e): any failure before the scratch directory is proven safe
+# stops the run. -e is switched off below, because the scenarios deliberately
+# run commands that fail.
+set -eu
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v jq > /dev/null || { echo "jq is required"; exit 2; }
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# workdir_ok DIR  succeeds only for a directory this run just created: an
+# absolute path at least two levels deep, an existing directory, owned by us,
+# and still empty. Everything below is written under it, so it must never be
+# empty, "/" or a system directory such as /bin.
+workdir_ok() {
+    local d="${1:-}"
+    [[ "$d" =~ ^/[^/]+/[^/].* ]] || return 1
+    [ -d "$d" ] && [ -O "$d" ] && [ ! -L "$d" ] || return 1
+    [ -z "$(ls -A -- "$d" 2> /dev/null)" ]
+}
+
+WORK="$(mktemp -d)" || {
+    echo "mktemp failed" >&2
+    exit 2
+}
+workdir_ok "$WORK" || {
+    echo "refusing to run: [$WORK] is not a fresh private directory" >&2
+    exit 2
+}
+trap 'rm -rf -- "$WORK"' EXIT
 BIN="$WORK/bin"
 SCRIPTS="$WORK/scripts"
 mkdir -p "$BIN" "$SCRIPTS" "$WORK/lib"
@@ -73,6 +94,7 @@ printf '%s\t%s\t%s\t%s\n' "${SMTP_HOST:-}" "${EMAIL_TO:-}" "${WD_TITLE:-}" "$(pr
 exit 0
 STUB
 chmod +x "$BIN"/*
+set +e # setup is done; scenarios run commands that are expected to fail
 
 # --- scenario helpers --------------------------------------------------------
 
@@ -520,6 +542,46 @@ lacks "proc path override ignored in production" "$WORK/out.log" "$WORK/nope-pro
 check "env file override ignored in production" "$([ "$(rc)" = 2 ] && echo used || echo ignored)" ignored
 check "state dir override ignored in production" "$(test -e "$WORK/prod-state" && echo created || echo absent)" absent
 rm -f "$ENVF"
+
+echo "the scratch-directory guard refuses unsafe paths"
+ln -s "$WORK/lib" "$WORK/lnk"
+mkdir "$WORK/fresh"
+for bad in "" / /bin /usr /tmp relative "$WORK/does-not-exist" "$WORK" "$WORK/lnk"; do
+    check "workdir_ok [$bad] refused" "$(workdir_ok "$bad" && echo ok || echo refused)" refused
+done
+check "workdir_ok accepts a fresh empty directory" "$(workdir_ok "$WORK/fresh" && echo ok || echo refused)" ok
+rm -f "$WORK/lnk"
+rmdir "$WORK/fresh"
+
+echo "the installer never honors the test seam as root"
+INSTALL="$REPO/scripts/install-watchdog.sh"
+seam() { # seam UID [SWITCH]  -> allowed | refused (uid is a function-level stub)
+    WATCHDOG_TESTING="${2-1}" bash -c 'source "$1"; stub_uid="$2"; current_uid() { echo "$stub_uid"; }; testing_seam_ok && echo allowed || echo refused' _ "$INSTALL" "$1"
+}
+check "seam refused for uid 0" "$(seam 0)" refused
+check "seam allowed for a non-root uid with the switch" "$(seam 1000)" allowed
+check "seam refused for a non-root uid without the switch" "$(seam 1000 "")" refused
+healthy
+mkdir "$WORK/decoy"
+printf 'touch "%s"\n' "$MARK" > "$WORK/decoy/watchdog-env.sh"
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+# uid stubbed to 0: the variables must be ignored, so nothing from the decoy
+# directory is sourced and the real settings path is the one reported.
+WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$WORK/decoy" PATH="$BIN:/usr/bin:/bin" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" \
+    bash -c 'source "$1"; current_uid() { echo 0; }; cmd_test' _ "$INSTALL" > "$WORK/o.log" 2>&1
+nomark "as root the decoy WATCHDOG_INSTALLED_LIB is never sourced"
+lacks "as root the WATCHDOG_ENV_FILE override is ignored" "$WORK/o.log" "$ENVF"
+check "as root no test alert goes out through the overrides" "$(calls)" 0
+# real (non-root) user, switch not set: the root-requiring path must refuse.
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "variables without the switch: refused" "$?" 1
+check "variables without the switch: nothing sent" "$(calls)" 0
+if [ "$(id -u)" -ne 0 ]; then
+    contains "variables without the switch: says to run as root" "$WORK/o.log" "Run this as root"
+fi
+rm -rf "$WORK/decoy" "$ENVF"
 
 echo "the unit file carries the hardening"
 UNIT="$REPO/scripts/frankenllm-watchdog.service"
