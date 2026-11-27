@@ -121,7 +121,7 @@ main model. If you change models, re-check with `ollama ps` that both show
 
 ### Remote Install Hardening (opt-in)
 
-`remote/install.sh` reads four optional settings. All are unset by default, which
+`remote/install.sh` reads five optional settings. All are unset by default, which
 keeps the current behavior (bind `0.0.0.0`, units run as the invoking user, no
 resource caps). Each is validated before anything is copied to the server or
 written to a unit; an invalid value stops the install.
@@ -138,6 +138,9 @@ FRANKEN_SERVICE_USER=frankenllm
 # systemd MemoryMax / TasksMax per unit: a number with optional K/M/G/T, or infinity
 FRANKEN_MEMORY_MAX=24G
 FRANKEN_TASKS_MAX=512
+
+# Pin the Ollama version the install fetches: X.Y.Z or X.Y.Z-rcN
+FRANKEN_OLLAMA_VERSION=0.33.2
 ```
 
 Notes: with `FRANKEN_BIND_ADDR` set, the other scripts must reach the server at
@@ -152,6 +155,16 @@ you must grant device access yourself. `remote/setup-warmup.sh` validates
 `FRANKEN_BIND_ADDR` and the boot warmup checks readiness at that address when
 set (localhost otherwise). Unset or empty `MemoryMax`/`TasksMax` writes no line. The text
 rendering is tested by `tests/test-unit-render.sh`.
+
+`FRANKEN_OLLAMA_VERSION` is passed to the upstream installer as `OLLAMA_VERSION`
+(`curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.33.2 sh`). Unset keeps
+the current behavior (latest upstream) and prints a warning that the install is
+unpinned. The value is validated on the workstation and again on the server
+(`^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$`). After install the version reported by the
+`ollama` binary is printed, and a pinned install fails if it differs. An existing
+install at a different version is re-installed at the pin. The upstream script has
+no checksum step, so a pin gives a reproducible version, not integrity. The helpers
+are tested by `tests/test-ollama-pin.sh`.
 
 ## Example Configurations
 
