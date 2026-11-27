@@ -8,8 +8,9 @@ Type=oneshot
 # Run unprivileged from a root-owned directory so nobody who can write the
 # FrankenLLM checkout can ever get this to run their code as root.
 ExecStart=/usr/local/lib/frankenllm/watchdog.sh
-EnvironmentFile=-/etc/frankenllm/watchdog.env
-Environment=WATCHDOG_STATE_DIR=/var/lib/frankenllm-watchdog
+# The settings file is handed over as a credential (read as root, readable only
+# by this unit) and parsed by watchdog-env.sh as data, never as shell code.
+LoadCredential=watchdog.env:/etc/frankenllm/watchdog.env
 Environment=HOME=/var/lib/frankenllm-watchdog
 DynamicUser=yes
 StateDirectory=frankenllm-watchdog
@@ -23,3 +24,9 @@ ProtectSystem=strict
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
+# Resource ceilings so a hostile or broken endpoint cannot starve the GPU box.
+# No PrivateDevices: nvidia-smi needs the NVIDIA device nodes.
+MemoryMax=128M
+CPUQuota=50%
+TimeoutStartSec=120
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

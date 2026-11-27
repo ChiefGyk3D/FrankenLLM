@@ -16,7 +16,7 @@ trap 'rm -rf "$WORK"' EXIT
 BIN="$WORK/bin"
 SCRIPTS="$WORK/scripts"
 mkdir -p "$BIN" "$SCRIPTS" "$WORK/lib"
-cp "$REPO/scripts/watchdog.sh" "$REPO/scripts/watchdog-notify.sh" "$SCRIPTS/"
+cp "$REPO/scripts/watchdog.sh" "$REPO/scripts/watchdog-notify.sh" "$REPO/scripts/watchdog-env.sh" "$SCRIPTS/"
 
 CALLS="$WORK/calls.log"   # one line per notification the stub curl received
 ARGV="$WORK/argv.log"     # every curl argv, to prove secrets never appear in it
@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -K) cfg="$2"; shift 2 ;;
         -w) want_code=1; shift 2 ;;
-        -m | -o | -X | -H | --data-binary) shift 2 ;;
+        -m | -o | -X | -H | --data-binary | --proto | --proto-redir | --max-filesize) shift 2 ;;
         http*) url="$1"; shift ;;
         *) shift ;;
     esac
@@ -91,12 +91,15 @@ healthy() {
 
 # run_wd NOW [VAR=value ...]  -> runs the watchdog with a cleaned environment
 run_wd() {
-    local now="$1"
+    local now="$1" testing=(WATCHDOG_TESTING=1)
     shift
+    # TESTING_OFF=1 runs the script as production would: no test overrides.
+    [ -n "${TESTING_OFF:-}" ] && testing=()
     env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" \
         STUB_DIR="$WORK" STUB_CALLS="$CALLS" STUB_ARGV="$ARGV" STUB_EMAILS="$EMAILS" \
         STUB_DOWN="${STUB_DOWN:-}" STUB_SMI_FAIL="${STUB_SMI_FAIL:-}" STUB_HTTP_CODE="${STUB_HTTP_CODE:-}" \
         STUB_EMAIL_FAIL="${STUB_EMAIL_FAIL:-}" \
+        "${testing[@]}" \
         WATCHDOG_STATE_DIR="$WORK/state" WATCHDOG_PROC_NVIDIA_VERSION="$WORK/proc-version" \
         WATCHDOG_LIBDIR="$WORK/lib" WATCHDOG_REBOOT_FILE="$WORK/reboot-required" \
         WATCHDOG_NOW="$now" "$@" \
@@ -271,6 +274,259 @@ printf 'touch "%s/sourced-marker"\n' "$WORK" > "$WORK/.env"
 run_wd $T0 "$DISCORD"
 check "config.sh and .env beside the scripts are ignored" "$(test -e "$WORK/sourced-marker" && echo sourced || echo ignored)" ignored
 rm -f "$WORK/config.sh" "$WORK/.env"
+
+# =============================================================================
+# Hostile values. Every marker file below is the proof of code execution: it
+# must never exist after a run.
+# =============================================================================
+MARK="$WORK/pwned"
+ENVF="$WORK/test.env"
+# PATH is always set, so under `set -u` Bash really evaluates the subscript
+# (a bare x[...] dies as "unbound variable" before the command runs).
+HOSTILE='PATH[$(touch '"$MARK"')]'
+skew() {
+    : > "$WORK/lib/libnvidia-ml.so.595.99.03"
+    rm -f "$WORK/lib/libnvidia-ml.so.595.99.02"
+}
+nomark() {
+    check "$1" "$(test -e "$MARK" && echo EXECUTED || echo clean)" clean
+    rm -f "$MARK"
+}
+alert_run() { # a fresh skew problem, then run with the given settings
+    healthy
+    skew
+    run_wd "$@"
+}
+has_line() { # has_line NAME REGEX FILE
+    if grep -qE -- "$2" "$3"; then
+        PASS=$((PASS + 1))
+        echo "  ok   $1"
+    else
+        FAIL=$((FAIL + 1))
+        echo "  FAIL $1: /$2/ not in $3"
+    fi
+}
+envload() { # envload FILE -> runs the reader in a clean shell, output in o.log
+    env -i PATH=/usr/bin:/bin bash -c 'source "$1"; wd_load_env "$2"; echo "rc=$? [${WATCHDOG_LABEL:-unset}] [${DISCORD_WEBHOOK_URL:-unset}]"' _ "$SCRIPTS/watchdog-env.sh" "$1" > "$WORK/o.log" 2>&1
+}
+
+echo "env file is data, never shell code"
+printf '%s\n' '# comment' '' '  # indented comment' 'DISCORD_WEBHOOK_URL=$(touch "'"$MARK"'")' 'WATCHDOG_LABEL=a b "c" $HOME `x`' > "$ENVF"
+envload "$ENVF"
+contains "valid file loads" "$WORK/o.log" "rc=0"
+contains "values are taken literally" "$WORK/o.log" '[a b "c" $HOME `x`] [$(touch'
+nomark "command substitution in a value does not run"
+bad_env() { # bad_env NAME CONTENT (printf %b escapes allowed)
+    printf '%b' "$2" > "$ENVF"
+    envload "$ENVF"
+    contains "$1 is rejected, nothing exported" "$WORK/o.log" "rc=1 [unset] [unset]"
+}
+bad_env "line that is not KEY=VALUE (after a good line)" 'WATCHDOG_LABEL=ok\nBAD LINE\n'
+bad_env "bare command" 'touch /x\n'
+bad_env "unknown key" 'UNKNOWN_KEY=1\n'
+bad_env "PATH key" 'PATH=/tmp\n'
+bad_env "LD_PRELOAD key" 'LD_PRELOAD=/tmp/x.so\n'
+bad_env "lowercase key" 'watchdog_label=x\n'
+bad_env "CRLF line ending" 'WATCHDOG_LABEL=ok\r\n'
+bad_env "tab in a value" 'WATCHDOG_LABEL=a\tb\n'
+bad_env "escape character" 'WATCHDOG_LABEL=a\033b\n'
+bad_env "NUL byte" 'WATCHDOG_LABEL=a\0b\n'
+bad_env "export prefix" 'export WATCHDOG_LABEL=x\n'
+rm -f "$ENVF"
+
+echo "install-watchdog.sh test never executes the env file"
+healthy
+printf 'DISCORD_WEBHOOK_URL=$(touch "%s")\n' "$MARK" > "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
+check "hostile file: exit 1" "$?" 1
+nomark "hostile value is not executed as root would have"
+printf 'touch "%s"\n' "$MARK" > "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
+check "bare command line: exit 1" "$?" 1
+nomark "bare command line is not executed"
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
+check "good file: exit 0" "$?" 0
+check "good file: one test alert sent" "$(calls)" 1
+rm -f "$ENVF"
+
+echo "numeric settings never reach arithmetic unchecked"
+alert_run "$HOSTILE" "$DISCORD"
+check "WATCHDOG_NOW hostile: exit 2" "$(rc)" 2
+nomark "WATCHDOG_NOW hostile: no execution"
+check "WATCHDOG_NOW hostile: nothing sent" "$(calls)" 0
+alert_run $T0 "$DISCORD"
+run_wd "$HOSTILE" "$DISCORD"
+check "WATCHDOG_NOW hostile (state exists): exit 2" "$(rc)" 2
+nomark "WATCHDOG_NOW hostile (state exists): no execution"
+run_wd $((T0 + HOUR)) "$DISCORD" "WATCHDOG_REPEAT_HOURS=$HOSTILE"
+check "REPEAT_HOURS hostile (state exists): exit 2" "$(rc)" 2
+nomark "REPEAT_HOURS hostile: no execution"
+run_wd $((T0 + HOUR)) "$DISCORD" "WATCHDOG_REBOOT_GRACE_HOURS=$HOSTILE"
+check "REBOOT_GRACE_HOURS hostile: exit 2" "$(rc)" 2
+nomark "REBOOT_GRACE_HOURS hostile: no execution"
+run_wd $((T0 + HOUR)) "$DISCORD" "WATCHDOG_PORTS=11434 $HOSTILE"
+check "PORTS hostile: exit 2" "$(rc)" 2
+nomark "PORTS hostile: no execution"
+printf 'WATCHDOG_REPEAT_HOURS=%s\n' "$HOSTILE" > "$ENVF"
+run_wd $((T0 + HOUR)) "$DISCORD" WATCHDOG_ENV_FILE="$ENVF"
+check "hostile value from the env file: exit 2" "$(rc)" 2
+nomark "hostile value from the env file: no execution"
+rm -f "$ENVF"
+for bad in 0 -1 "1 2" 99999 abc 1.5 "" ; do
+    alert_run $T0 "$DISCORD" "WATCHDOG_REPEAT_HOURS=${bad:-' '}"
+    check "REPEAT_HOURS [$bad] rejected" "$(rc)" 2
+done
+for bad in 0 65536 99999999999999999999 "11434;x" "-1" "0x10"; do
+    alert_run $T0 "$DISCORD" "WATCHDOG_PORTS=$bad"
+    check "PORTS [$bad] rejected" "$(rc)" 2
+done
+alert_run $T0 "$DISCORD" "WATCHDOG_PORTS=1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17"
+check "more than 16 ports rejected" "$(rc)" 2
+alert_run "0$T0" "$DISCORD"
+check "leading zeros are plain decimals" "$(rc)" 0
+
+echo "the Ollama host stays on loopback"
+for h in 169.254.169.254 example.com 10.0.0.5 '127.0.0.1@evil.test' '127.0.0.1/x' 'a b'; do
+    alert_run $T0 "$DISCORD" "WATCHDOG_HOST=$h"
+    check "host [$h] refused" "$(rc)" 2
+    check "host [$h]: no request was made" "$(wc -c < "$ARGV" | tr -d ' ')" 0
+done
+alert_run $T0 "$DISCORD" WATCHDOG_HOST=10.0.0.5 WATCHDOG_ALLOW_REMOTE_HOST=true
+check "remote host with the opt-in is allowed" "$(rc)" 0
+contains "opt-in probes the named host" "$ARGV" "http://10.0.0.5:11434/api/version"
+alert_run $T0 "$DISCORD" 'WATCHDOG_HOST=127.0.0.1@evil.test' WATCHDOG_ALLOW_REMOTE_HOST=true
+check "opt-in does not allow URL tricks" "$(rc)" 2
+alert_run $T0 "$DISCORD" WATCHDOG_HOST=::1
+check "IPv6 loopback allowed" "$(rc)" 0
+contains "IPv6 host is bracketed" "$ARGV" "http://[::1]:11434/api/version"
+alert_run $T0 "$DISCORD" WATCHDOG_HOST=localhost
+check "localhost allowed" "$(rc)" 0
+
+echo "curl is restricted to the right protocols"
+alert_run $T0 "$DISCORD"
+contains "webhook curl: https only" "$ARGV" "--proto =https --proto-redir =https"
+contains "probe curl: http only" "$ARGV" "--proto =http --max-filesize 1048576"
+alert_run $T0 NTFY_URL=https://ntfy.test/frank NTFY_TOKEN=tok
+contains "ntfy curl: https only" "$ARGV" "--proto =https --proto-redir =https"
+alert_run $T0 MATRIX_HOMESERVER=https://matrix.test MATRIX_ACCESS_TOKEN=tok 'MATRIX_ROOM_ID=!r:matrix.test'
+contains "matrix curl: https only" "$ARGV" "--proto =https --proto-redir =https"
+
+echo "notification endpoints must be single-line https"
+NL=$'\n'
+for u in 'http://discord.test/x' 'file:///etc/passwd' 'gopher://x/' 'https://a/b c' "https://a/ok${NL}url = \"http://evil.test/\"" "https://a/ok"$'\r'; do
+    alert_run $T0 "DISCORD_WEBHOOK_URL=$u"
+    check "discord [${u//$'\n'/<LF>}] not sent" "$(calls)" 0
+    check "discord [${u//$'\n'/<LF>}] reported failed" "$(rc)" 1
+done
+alert_run $T0 NTFY_URL=http://ntfy.test/x NTFY_TOKEN=tok
+check "ntfy over http (with a token) not sent" "$(calls)" 0
+alert_run $T0 NTFY_URL=https://ntfy.test/x "NTFY_TOKEN=tok${NL}url = \"http://evil.test/\""
+check "ntfy token with a newline not sent" "$(calls)" 0
+alert_run $T0 MATRIX_HOMESERVER=http://matrix.test MATRIX_ACCESS_TOKEN=tok 'MATRIX_ROOM_ID=!r:matrix.test'
+check "matrix over http not sent" "$(calls)" 0
+alert_run $T0 MATRIX_HOMESERVER=https://matrix.test "MATRIX_ACCESS_TOKEN=tok${NL}header = \"X: y\"" 'MATRIX_ROOM_ID=!r:matrix.test'
+check "matrix token with a newline not sent" "$(calls)" 0
+alert_run $T0 MATRIX_HOMESERVER=https://matrix.test MATRIX_ACCESS_TOKEN=tok "MATRIX_ROOM_ID=!r${NL}url = \"http://evil.test/\""
+check "matrix room with a newline not sent" "$(calls)" 0
+
+echo "the curl config writer refuses line breaks"
+env -i PATH=/usr/bin:/bin bash -c 'source "$1"; _cfg url "https://a/b"' _ "$SCRIPTS/watchdog-notify.sh" > "$WORK/o.log" 2>&1
+check "normal value: exact config line" "$(cat "$WORK/o.log")" 'url = "https://a/b"'
+for v in $'a\nurl = "http://evil.test/"' $'a\rb' $'a\tb' $'a\033b'; do
+    env -i PATH=/usr/bin:/bin bash -c 'source "$1"; _cfg url "$2"; echo "rc=$?"' _ "$SCRIPTS/watchdog-notify.sh" "$v" > "$WORK/o.log" 2>&1
+    check "control character refused, no config text" "$(cat "$WORK/o.log")" "rc=1"
+done
+
+echo "a newline-injected URL never reaches the network (real curl, local listener)"
+REALCURL=$(PATH=/usr/bin:/bin command -v curl || true)
+REALPY=$(PATH=/usr/bin:/bin command -v python3 || true)
+if [ -n "$REALCURL" ] && [ -n "$REALPY" ]; then
+    cat > "$WORK/listener.py" << 'PY'
+import socket, sys
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(1)
+print(s.getsockname()[1], flush=True)
+s.settimeout(8)
+try:
+    c, _ = s.accept()
+    open(sys.argv[1], "w").write("hit")
+    c.close()
+except Exception:
+    pass
+PY
+    rm -f "$WORK/hit" "$WORK/port"
+    "$REALPY" -I "$WORK/listener.py" "$WORK/hit" > "$WORK/port" &
+    LPID=$!
+    for _ in $(seq 1 50); do [ -s "$WORK/port" ] && break; sleep 0.1; done
+    LPORT=$(cat "$WORK/port")
+    INJ="https://127.0.0.1:1/ok\"${NL}url = \"http://127.0.0.1:${LPORT}/x"
+    env -i PATH=/usr/bin:/bin bash -c 'source "$1"; DISCORD_WEBHOOK_URL=$2; notify_discord problem t b; echo "rc=$?"' _ "$SCRIPTS/watchdog-notify.sh" "$INJ" > "$WORK/o.log" 2>&1
+    kill "$LPID" 2> /dev/null
+    wait "$LPID" 2> /dev/null
+    check "listener was never contacted" "$(test -e "$WORK/hit" && echo CONNECTED || echo blocked)" blocked
+    contains "delivery reported as failed" "$WORK/o.log" "rc=1"
+else
+    echo "  skip real-curl test: curl or python3 missing"
+fi
+
+echo "email is always TLS"
+for sec in none NONE plain; do
+    alert_run $T0 SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test SMTP_USER=u SMTP_PASSWORD=p "SMTP_SECURITY=$sec"
+    check "SMTP_SECURITY=$sec with credentials: no mail sent" "$(wc -l < "$EMAILS" | tr -d ' ')" 0
+done
+alert_run $T0 SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test SMTP_SECURITY=none
+check "SMTP_SECURITY=none without credentials: still no mail" "$(wc -l < "$EMAILS" | tr -d ' ')" 0
+alert_run $T0 SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test SMTP_SECURITY=ssl
+check "SMTP_SECURITY=ssl is accepted" "$(wc -l < "$EMAILS" | tr -d ' ')" 1
+alert_run $T0 SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test
+check "default (starttls) is accepted" "$(wc -l < "$EMAILS" | tr -d ' ')" 1
+alert_run $T0 SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test SMTP_PORT=70000
+check "SMTP_PORT out of range: no mail" "$(wc -l < "$EMAILS" | tr -d ' ')" 0
+alert_run $T0 "SMTP_HOST=smtp.test${NL}x" SMTP_FROM=a@test EMAIL_TO=b@test
+check "SMTP_HOST with a newline: no mail" "$(wc -l < "$EMAILS" | tr -d ' ')" 0
+alert_run $T0 SMTP_HOST=smtp.test SMTP_FROM=a@test "EMAIL_TO=b@test${NL}Bcc: x@test"
+check "EMAIL_TO with a header injection: no mail" "$(wc -l < "$EMAILS" | tr -d ' ')" 0
+
+echo "a huge /api/ps answer is not read"
+healthy
+{
+    printf '{"models":[{"name":"big","size":5,"size_vram":0}],"pad":"'
+    head -c 1200000 /dev/zero | tr '\0' a
+    printf '"}'
+} > "$WORK/ps-11434.json"
+run_wd $T0 "$DISCORD"
+check "oversize answer is ignored, not parsed" "$(calls)" 0
+echo '{"models":[{"name":"small","size":5,"size_vram":0}]}' > "$WORK/ps-11434.json"
+run_wd $T0 "$DISCORD"
+check "a normal answer still alerts" "$(calls)" 1
+
+echo "test-only overrides do nothing in production"
+healthy
+printf 'WATCHDOG_REPEAT_HOURS=abc\n' > "$ENVF"
+TESTING_OFF=1 MODE_ARG=--print run_wd "$HOSTILE" "WATCHDOG_PROC_NVIDIA_VERSION=$WORK/nope-proc" \
+    "WATCHDOG_STATE_DIR=$WORK/prod-state" WATCHDOG_ENV_FILE="$ENVF" "$DISCORD"
+nomark "WATCHDOG_NOW ignored in production"
+lacks "proc path override ignored in production" "$WORK/out.log" "$WORK/nope-proc"
+check "env file override ignored in production" "$([ "$(rc)" = 2 ] && echo used || echo ignored)" ignored
+check "state dir override ignored in production" "$(test -e "$WORK/prod-state" && echo created || echo absent)" absent
+rm -f "$ENVF"
+
+echo "the unit file carries the hardening"
+UNIT="$REPO/scripts/frankenllm-watchdog.service"
+has_line "memory ceiling" '^MemoryMax=[0-9]+[MG]$' "$UNIT"
+has_line "cpu ceiling" '^CPUQuota=[0-9]+%$' "$UNIT"
+has_line "runtime timeout" '^TimeoutStartSec=[0-9]+$' "$UNIT"
+has_line "address families" '^RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX$' "$UNIT"
+has_line "settings arrive as a credential" '^LoadCredential=watchdog\.env:/etc/frankenllm/watchdog\.env$' "$UNIT"
+has_line "dynamic user" '^DynamicUser=yes$' "$UNIT"
+lacks "no EnvironmentFile (it is not parsed by our reader)" "$UNIT" "EnvironmentFile="
+lacks "no PrivateDevices (nvidia-smi needs the device nodes)" "$UNIT" "PrivateDevices="
+lacks "no state-dir override in the unit" "$UNIT" "WATCHDOG_STATE_DIR"
 
 echo
 echo "passed $PASS, failed $FAIL"

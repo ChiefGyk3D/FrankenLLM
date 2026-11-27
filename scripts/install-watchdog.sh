@@ -47,7 +47,7 @@ cmd_install() {
     command -v python3 > /dev/null || echo "Note: python3 not found, email alerts will not work."
 
     install -d -m 0755 -o root -g root "$LIB_DIR" /etc/frankenllm
-    install -m 0755 -o root -g root "$SCRIPT_DIR/watchdog.sh" "$SCRIPT_DIR/watchdog-notify.sh" "$LIB_DIR/"
+    install -m 0755 -o root -g root "$SCRIPT_DIR/watchdog.sh" "$SCRIPT_DIR/watchdog-notify.sh" "$SCRIPT_DIR/watchdog-env.sh" "$LIB_DIR/"
     install -m 0644 -o root -g root "$SCRIPT_DIR/frankenllm-watchdog.service" "$SCRIPT_DIR/frankenllm-watchdog.timer" /etc/systemd/system/
 
     if [ ! -f "$ENV_FILE" ]; then
@@ -67,19 +67,26 @@ cmd_uninstall() {
     need_root uninstall
     systemctl disable --now frankenllm-watchdog.timer 2> /dev/null || true
     rm -f /etc/systemd/system/frankenllm-watchdog.service /etc/systemd/system/frankenllm-watchdog.timer
-    rm -f "$LIB_DIR/watchdog.sh" "$LIB_DIR/watchdog-notify.sh"
+    rm -f "$LIB_DIR/watchdog.sh" "$LIB_DIR/watchdog-notify.sh" "$LIB_DIR/watchdog-env.sh"
     systemctl daemon-reload
     echo "Removed. $ENV_FILE and /var/lib/frankenllm-watchdog were left in place."
 }
 
 cmd_test() {
-    need_root test
+    # The test suite points this at scratch files; it cannot run as root there.
+    if [ "${WATCHDOG_TESTING:-}" = "1" ]; then
+        ENV_FILE="${WATCHDOG_ENV_FILE:-$ENV_FILE}"
+        LIB_DIR="${WATCHDOG_INSTALLED_LIB:-$LIB_DIR}"
+    else
+        need_root test
+    fi
     [ -f "$ENV_FILE" ] || { echo "No $ENV_FILE yet. Run install first." >&2; exit 1; }
     (
-        set -a
-        # shellcheck disable=SC1090  # operator-supplied env file, absent at lint time
-        source "$ENV_FILE"
-        set +a
+        # The env file is data, never sourced: the restricted reader enforces
+        # the same grammar the timer run uses.
+        # shellcheck disable=SC1091  # installed copy, absent at lint time
+        source "$LIB_DIR/watchdog-env.sh"
+        wd_load_env "$ENV_FILE" || exit 1
         # shellcheck disable=SC1091  # installed copy, absent at lint time
         source "$LIB_DIR/watchdog-notify.sh"
         notify_all recovery "[${WATCHDOG_LABEL:-FrankenLLM}] test alert" "If you can read this, this channel works."

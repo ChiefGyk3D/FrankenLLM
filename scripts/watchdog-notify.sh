@@ -10,14 +10,36 @@
 #   ntfy     NTFY_URL            (optional NTFY_TOKEN)
 #   Matrix   MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_ROOM_ID
 #   Email    SMTP_HOST, SMTP_FROM, EMAIL_TO  (optional SMTP_PORT, SMTP_USER,
-#            SMTP_PASSWORD, SMTP_SECURITY=starttls|ssl|none)
+#            SMTP_PASSWORD, SMTP_SECURITY=starttls|ssl)
+#
+# Endpoints must be single-line https URLs; every curl is limited to https
+# (and https redirects). Email is always TLS (STARTTLS or implicit); there is
+# no cleartext mode. Values with control characters are refused before they
+# can reach a curl config or a mail header.
 #
 # Secrets reach curl through a config file descriptor, never argv, so they do
 # not show up in `ps`. notify_all returns 0 when at least one channel
 # delivered, 1 when channels are configured but none delivered, 2 when no
 # channel is configured at all.
 
+# _clean VALUE...  succeeds only when no value has a control character
+# (CR, LF, tab, escape, DEL). NUL cannot live in a Bash variable at all.
+_clean() {
+    local v
+    for v in "$@"; do
+        [[ "$v" =~ [[:cntrl:]] ]] && return 1
+    done
+    return 0
+}
+
+# _https_url VALUE  a single-line https URL with no whitespace
+_https_url() {
+    _clean "$1" && [[ "$1" =~ ^https://[^[:space:]]+$ ]]
+}
+
+# _cfg KEY VALUE  one curl config line; refuses values that could end the line
 _cfg() {
+    _clean "$2" || return 1
     local v="${2//\\/\\\\}"
     v="${v//\"/\\\"}"
     printf '%s = "%s"\n' "$1" "$v"
@@ -29,10 +51,14 @@ _http_ok() {
 
 notify_discord() {
     local title="$2" body="$3" text code
+    if ! _https_url "$DISCORD_WEBHOOK_URL"; then
+        echo "notify: the Discord webhook must be a single-line https URL" >&2
+        return 1
+    fi
     text="**${title}**"$'\n'"${body}"
     text="${text:0:1900}"
     code=$(jq -n --arg c "$text" '{content: $c, allowed_mentions: {parse: []}}' |
-        curl -sS -m 15 -o /dev/null -w '%{http_code}' \
+        curl -sS -m 15 --proto '=https' --proto-redir '=https' -o /dev/null -w '%{http_code}' \
             -K <(_cfg url "$DISCORD_WEBHOOK_URL") \
             -H 'Content-Type: application/json' --data-binary @- 2> /dev/null) || return 1
     _http_ok "$code"
@@ -40,6 +66,10 @@ notify_discord() {
 
 notify_ntfy() {
     local level="$1" title="$2" body="$3" prio tags code
+    if ! _https_url "$NTFY_URL" || ! _clean "${NTFY_TOKEN:-}"; then
+        echo "notify: the ntfy URL must be a single-line https URL and the token one line" >&2
+        return 1
+    fi
     case "$level" in
         problem) prio=high tags=warning ;;
         *) prio=default tags=white_check_mark ;;
@@ -47,7 +77,7 @@ notify_ntfy() {
     # HTTP header values must stay plain ASCII
     title=$(printf '%s' "$title" | tr -cd '\40-\176')
     code=$(printf '%s' "$body" |
-        curl -sS -m 15 -o /dev/null -w '%{http_code}' -X POST \
+        curl -sS -m 15 --proto '=https' --proto-redir '=https' -o /dev/null -w '%{http_code}' -X POST \
             -K <(
                 _cfg url "$NTFY_URL"
                 _cfg header "Title: $title"
@@ -60,10 +90,14 @@ notify_ntfy() {
 
 notify_matrix() {
     local title="$2" body="$3" room txn code
+    if ! _https_url "$MATRIX_HOMESERVER" || ! _clean "$MATRIX_ACCESS_TOKEN" "$MATRIX_ROOM_ID"; then
+        echo "notify: the Matrix homeserver must be a single-line https URL and the token and room one line" >&2
+        return 1
+    fi
     room=$(jq -rn --arg s "$MATRIX_ROOM_ID" '$s | @uri')
     txn="fllm-$(date +%s)-$RANDOM"
     code=$(jq -n --arg b "${title}"$'\n'"${body}" '{msgtype: "m.text", body: $b}' |
-        curl -sS -m 15 -o /dev/null -w '%{http_code}' -X PUT \
+        curl -sS -m 15 --proto '=https' --proto-redir '=https' -o /dev/null -w '%{http_code}' -X PUT \
             -K <(
                 _cfg url "${MATRIX_HOMESERVER%/}/_matrix/client/v3/rooms/${room}/send/m.room.message/${txn}"
                 _cfg header "Authorization: Bearer $MATRIX_ACCESS_TOKEN"
@@ -71,15 +105,37 @@ notify_matrix() {
     _http_ok "$code"
 }
 
-# Standard-library SMTP so the box needs no local mail agent.
+# Standard-library SMTP so the box needs no local mail agent. Always TLS.
 notify_email() {
-    local title="$2" body="$3"
-    WD_TITLE="$title" WD_BODY="$body" python3 -I -c '
+    local title="$2" body="$3" mode port
+    mode="${SMTP_SECURITY:-starttls}"
+    mode="${mode,,}"
+    port="${SMTP_PORT:-}"
+    if ! _clean "$SMTP_HOST" "$SMTP_FROM" "$EMAIL_TO" "$port" "$mode" "${SMTP_USER:-}" "${SMTP_PASSWORD:-}"; then
+        echo "notify: an email setting contains a control character" >&2
+        return 1
+    fi
+    case "$mode" in starttls | ssl) ;; *)
+        echo "notify: SMTP_SECURITY must be starttls or ssl (cleartext is not supported)" >&2
+        return 1
+        ;;
+    esac
+    if ! [[ "$SMTP_HOST" =~ ^[A-Za-z0-9.-]{1,253}$ ]]; then
+        echo "notify: SMTP_HOST has characters that are not allowed" >&2
+        return 1
+    fi
+    if [ -n "$port" ] && { ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || [ $((10#$port)) -lt 1 ] || [ $((10#$port)) -gt 65535 ]; }; then
+        echo "notify: SMTP_PORT must be 1 to 65535" >&2
+        return 1
+    fi
+    WD_TITLE="$title" WD_BODY="$body" SMTP_SECURITY="$mode" python3 -I -c '
 import os, smtplib, ssl
 from email.message import EmailMessage
 
 host = os.environ["SMTP_HOST"]
 mode = os.environ.get("SMTP_SECURITY", "starttls").lower()
+if mode not in ("starttls", "ssl"):
+    raise SystemExit(1)
 port = int(os.environ.get("SMTP_PORT") or (465 if mode == "ssl" else 587))
 msg = EmailMessage()
 msg["Subject"] = os.environ["WD_TITLE"]
@@ -103,7 +159,8 @@ with server:
 notify_all() {
     local level="$1" title="$2" body="$3" configured=0 delivered=0
 
-    if [ "${WATCHDOG_DRY_RUN:-}" = "1" ]; then
+    # Test-only: print instead of sending. Needs the explicit testing switch.
+    if [ "${WATCHDOG_TESTING:-}" = "1" ] && [ "${WATCHDOG_DRY_RUN:-}" = "1" ]; then
         printf 'DRY RUN [%s] %s\n%s\n' "$level" "$title" "$body"
         return 0
     fi

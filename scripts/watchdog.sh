@@ -25,7 +25,8 @@
 #
 # Settings (environment, usually /etc/frankenllm/watchdog.env):
 #   WATCHDOG_LABEL=FrankenLLM         name shown in alerts (never a hostname)
-#   WATCHDOG_HOST=127.0.0.1           where Ollama listens
+#   WATCHDOG_HOST=127.0.0.1           where Ollama listens (loopback only)
+#   WATCHDOG_ALLOW_REMOTE_HOST=true   explicit opt-in to watch a non-loopback host
 #   WATCHDOG_PORTS="11434 11435"      Ollama ports to check (default shown)
 #   WATCHDOG_REPEAT_HOURS=24          reminder interval while a problem lasts
 #   WATCHDOG_REBOOT_GRACE_HOURS=72    how long a pending reboot is tolerated
@@ -35,6 +36,16 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Settings file: read as data by the restricted reader, never sourced. Under
+# systemd it arrives as a credential; WATCHDOG_ENV_FILE is test-only.
+# shellcheck source=watchdog-env.sh
+source "$SCRIPT_DIR/watchdog-env.sh"
+if [ "${WATCHDOG_TESTING:-}" = "1" ] && [ -n "${WATCHDOG_ENV_FILE:-}" ]; then
+    wd_load_env "$WATCHDOG_ENV_FILE" || exit 2
+elif [ -n "${CREDENTIALS_DIRECTORY:-}" ] && [ -f "$CREDENTIALS_DIRECTORY/watchdog.env" ]; then
+    wd_load_env "$CREDENTIALS_DIRECTORY/watchdog.env" || exit 2
+fi
 
 # Secrets from Doppler instead of the env file, when asked for and available.
 if [ "${WATCHDOG_USE_DOPPLER:-}" = "true" ] && [ -z "${WATCHDOG_IN_DOPPLER:-}" ] && command -v doppler > /dev/null; then
@@ -56,22 +67,68 @@ LABEL="${WATCHDOG_LABEL:-FrankenLLM}"
 HOST="${WATCHDOG_HOST:-127.0.0.1}"
 REPEAT_HOURS="${WATCHDOG_REPEAT_HOURS:-24}"
 REBOOT_GRACE_HOURS="${WATCHDOG_REBOOT_GRACE_HOURS:-72}"
-STATE_DIR="${WATCHDOG_STATE_DIR:-/var/lib/frankenllm-watchdog}"
-PROC_VERSION="${WATCHDOG_PROC_NVIDIA_VERSION:-/proc/driver/nvidia/version}"
-LIB_DIR="${WATCHDOG_LIBDIR:-/usr/lib/x86_64-linux-gnu}"
-REBOOT_FILE="${WATCHDOG_REBOOT_FILE:-/run/reboot-required}"
-NOW="${WATCHDOG_NOW:-$(date +%s)}"
+
+# Paths and the clock can be overridden only by the test suite, which sets
+# WATCHDOG_TESTING=1. In production the environment cannot move them.
+STATE_DIR=/var/lib/frankenllm-watchdog
+PROC_VERSION=/proc/driver/nvidia/version
+LIB_DIR=/usr/lib/x86_64-linux-gnu
+REBOOT_FILE=/run/reboot-required
+NOW="$(date +%s)"
+if [ "${WATCHDOG_TESTING:-}" = "1" ]; then
+    STATE_DIR="${WATCHDOG_STATE_DIR:-$STATE_DIR}"
+    PROC_VERSION="${WATCHDOG_PROC_NVIDIA_VERSION:-$PROC_VERSION}"
+    LIB_DIR="${WATCHDOG_LIBDIR:-$LIB_DIR}"
+    REBOOT_FILE="${WATCHDOG_REBOOT_FILE:-$REBOOT_FILE}"
+    NOW="${WATCHDOG_NOW:-$NOW}"
+fi
+
+# Every value that reaches Bash arithmetic is checked first: Bash evaluates
+# x[$(cmd)] inside $(( )), so a numeric setting must be plain bounded digits.
+check_uint() { # check_uint NAME VALUE MIN MAX  -> prints the normalized number
+    local v="$2"
+    if ! [[ "$v" =~ ^[0-9]{1,11}$ ]] || [ $((10#$v)) -lt "$3" ] || [ $((10#$v)) -gt "$4" ]; then
+        echo "watchdog: $1 must be a whole number from $3 to $4" >&2
+        return 1
+    fi
+    printf '%d' $((10#$v))
+}
+REPEAT_HOURS=$(check_uint WATCHDOG_REPEAT_HOURS "$REPEAT_HOURS" 1 8760) || exit 2
+REBOOT_GRACE_HOURS=$(check_uint WATCHDOG_REBOOT_GRACE_HOURS "$REBOOT_GRACE_HOURS" 0 8760) || exit 2
+NOW=$(check_uint WATCHDOG_NOW "$NOW" 0 99999999999) || exit 2
+
+# The watched Ollama stays on loopback unless the operator opts in.
+if ! [[ "$HOST" =~ ^[A-Za-z0-9.:-]{1,253}$ ]]; then
+    echo "watchdog: WATCHDOG_HOST has characters that are not allowed" >&2
+    exit 2
+fi
+if ! [[ "$HOST" =~ ^(127(\.[0-9]{1,3}){3}|localhost|::1)$ ]] && [ "${WATCHDOG_ALLOW_REMOTE_HOST:-}" != "true" ]; then
+    echo "watchdog: WATCHDOG_HOST must be a loopback address; set WATCHDOG_ALLOW_REMOTE_HOST=true to watch another host" >&2
+    exit 2
+fi
+HOST_URL="$HOST"
+case "$HOST" in *:*) HOST_URL="[$HOST]" ;; esac
 
 # Deliberately does not source config.sh or any .env from the checkout: this
 # runs on a timer and must not execute files other users can write.
 read -r -a PORTS <<< "${WATCHDOG_PORTS:-11434 11435}"
+if [ "${#PORTS[@]}" -lt 1 ] || [ "${#PORTS[@]}" -gt 16 ]; then
+    echo "watchdog: WATCHDOG_PORTS must list 1 to 16 ports" >&2
+    exit 2
+fi
+for i in "${!PORTS[@]}"; do
+    PORTS[i]=$(check_uint "WATCHDOG_PORTS entry" "${PORTS[$i]}" 1 65535) || exit 2
+done
+
+MAX_BODY=1048576 # largest local HTTP answer we will read
 
 PROB_KEYS=()
 PROB_MSGS=()
 
 problem() {
+    local m="${2//[[:cntrl:]]/ }"
+    PROB_MSGS+=("${m//|//}") # '|' separates the state file fields
     PROB_KEYS+=("$1")
-    PROB_MSGS+=("${2//|//}") # '|' separates the state file fields
 }
 
 # --- checks ------------------------------------------------------------------
@@ -101,11 +158,16 @@ check_gpu() {
 check_ollama() {
     local port ps_json cpu_models
     for port in "${PORTS[@]}"; do
-        if ! curl -s -m 5 -o /dev/null -f "http://${HOST}:${port}/api/version"; then
+        if ! curl -s -m 5 --proto '=http' --max-filesize "$MAX_BODY" -o /dev/null -f "http://${HOST_URL}:${port}/api/version"; then
             problem "ollama-${port}" "Ollama on port ${port} is not answering. Check: systemctl status ollama-gpu*."
             continue
         fi
-        ps_json=$(curl -s -m 5 "http://${HOST}:${port}/api/ps") || continue
+        # Bounded read: a hostile endpoint cannot make us buffer more than MAX_BODY.
+        ps_json=$(
+            curl -s -f -m 5 --proto '=http' --max-filesize "$MAX_BODY" "http://${HOST_URL}:${port}/api/ps" | head -c $((MAX_BODY + 1))
+            exit "${PIPESTATUS[0]}"
+        ) || continue
+        [ "${#ps_json}" -le "$MAX_BODY" ] || continue
         cpu_models=$(printf '%s' "$ps_json" |
             jq -r '[.models[]? | select((.size // 0) > 0 and (.size_vram // 0) == 0) | .name] | join(", ")' 2> /dev/null) || continue
         if [ -n "$cpu_models" ]; then
@@ -115,9 +177,11 @@ check_ollama() {
 }
 
 check_reboot() {
-    local age_hours
+    local age_hours mtime
     [ -e "$REBOOT_FILE" ] || return 0
-    age_hours=$(((NOW - $(stat -c %Y "$REBOOT_FILE" 2> /dev/null || echo "$NOW")) / 3600))
+    mtime=$(stat -c %Y "$REBOOT_FILE" 2> /dev/null) || mtime="$NOW"
+    [[ "$mtime" =~ ^[0-9]{1,11}$ ]] || mtime="$NOW"
+    age_hours=$(((NOW - 10#$mtime) / 3600))
     if [ "$age_hours" -ge "$REBOOT_GRACE_HOURS" ]; then
         problem reboot-pending "A reboot has been pending for ${age_hours}h (grace is ${REBOOT_GRACE_HOURS}h). Updated drivers or kernel are not active yet."
     fi
@@ -174,8 +238,10 @@ for i in "${!PROB_KEYS[@]}"; do
     else
         IFS='|' read -r first last _ < "$STATE_DIR/$key"
         # a damaged state file counts as "never told you", so you hear about it again
-        [[ "$first" =~ ^[0-9]+$ ]] || first="$NOW"
-        [[ "$last" =~ ^[0-9]+$ ]] || last=0
+        [[ "$first" =~ ^[0-9]{1,11}$ ]] || first="$NOW"
+        [[ "$last" =~ ^[0-9]{1,11}$ ]] || last=0
+        first=$((10#$first))
+        last=$((10#$last))
         if [ $((NOW - last)) -ge $((REPEAT_HOURS * 3600)) ]; then
             remind_keys+=("$key|$msg|$first")
             lines_remind+="- ${msg} (since $(duration $((NOW - first))) ago)"$'\n'
@@ -185,13 +251,14 @@ done
 
 # Anything with a state file that is no longer a problem has recovered.
 for f in "$STATE_DIR"/*; do
-    [ -f "$f" ] || continue
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
     key=$(basename "$f")
     still=0
     for k in "${PROB_KEYS[@]}"; do [ "$k" = "$key" ] && still=1; done
     if [ "$still" -eq 0 ]; then
         IFS='|' read -r first _ msg < "$f"
-        [[ "$first" =~ ^[0-9]+$ ]] || first="$NOW"
+        [[ "$first" =~ ^[0-9]{1,11}$ ]] || first="$NOW"
+        first=$((10#$first))
         recovered_keys+=("$key")
         lines_recovered+="- ${msg} (was broken for $(duration $((NOW - first))))"$'\n'
     fi
