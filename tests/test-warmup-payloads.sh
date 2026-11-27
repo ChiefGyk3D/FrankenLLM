@@ -283,4 +283,8 @@ VERIFY_RC=$?
 bash "$REPO/tests/test-install-flow.sh"
 FLOW_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ] && [ "$EXEC_RC" -eq 0 ] && [ "$TRANSPORT_RC" -eq 0 ] && [ "$VERIFY_RC" -eq 0 ] && [ "$FLOW_RC" -eq 0 ]
+# --- 21. Watchdog test (scratch dir only; no files left in the repo) ----------
+bash "$REPO/tests/test-watchdog.sh"
+WATCHDOG_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ] && [ "$EXEC_RC" -eq 0 ] && [ "$TRANSPORT_RC" -eq 0 ] && [ "$VERIFY_RC" -eq 0 ] && [ "$FLOW_RC" -eq 0 ] && [ "$WATCHDOG_RC" -eq 0 ]

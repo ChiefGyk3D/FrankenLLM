@@ -77,7 +77,9 @@ FrankenLLM/
 │   ├── install-ollama-native.sh # Native Ollama installation
 │   ├── health-check.sh     #    GPU health diagnostics
 │   ├── auto-fix.sh         #    Automatic GPU issue repair
-│   └── install-health-module.sh # Health module installer
+│   ├── install-health-module.sh # Health module installer
+│   ├── watchdog.sh         #    Timer-driven checks + alerts (see docs/WATCHDOG.md)
+│   └── install-watchdog.sh #    Watchdog installer + NVIDIA package hold
 │
 ├── docs/                   # 📚 Complete documentation
 │   ├── README.md           #    Full documentation
@@ -592,6 +594,17 @@ The health module automatically:
 3. Attempts to reload NVIDIA modules to fix issues
 4. Reboots up to 3 times if fixes fail
 5. Creates a login alert if issues persist
+
+### Alerts When Something Breaks Mid-Uptime
+
+Auto-fix only runs at boot, so a driver package upgraded while the machine is up can leave every model running on the CPU with nothing to tell you. The watchdog runs every five minutes, checks the driver, the loaded kernel module against the userland libraries, whether any loaded model has VRAM, and that each Ollama port answers, then sends one alert per problem and one when it clears. Discord, ntfy, Matrix, and email, each switched on by its own settings.
+
+```bash
+sudo scripts/install-watchdog.sh install
+sudo scripts/install-watchdog.sh hold-nvidia   # stop unattended upgrades drifting the driver
+```
+
+Details, settings, and the Doppler option are in [docs/WATCHDOG.md](docs/WATCHDOG.md).
 
 ### Manual Fix Commands
 
