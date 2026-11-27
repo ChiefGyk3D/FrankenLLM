@@ -143,7 +143,14 @@ FRANKEN_TASKS_MAX=512
 Notes: with `FRANKEN_BIND_ADDR` set, the other scripts must reach the server at
 that address. With `FRANKEN_SERVICE_USER` set, models live under the new
 account's home, not the invoking user's `~/.ollama`; models already pulled are
-not moved. Unset or empty `MemoryMax`/`TasksMax` writes no line. The text
+not moved. `root` is refused as a service user, and so is any existing account
+with uid 0. GPU access depends on group membership: NVIDIA device nodes are
+often restricted to the `video` or `render` group, so the installer adds the
+service user to whichever of those groups exist on the server (confirmed with
+`getent`) and prints which it added. If neither exists, nothing is added and
+you must grant device access yourself. `remote/setup-warmup.sh` validates
+`FRANKEN_BIND_ADDR` and the boot warmup checks readiness at that address when
+set (localhost otherwise). Unset or empty `MemoryMax`/`TasksMax` writes no line. The text
 rendering is tested by `tests/test-unit-render.sh`.
 
 ## Example Configurations

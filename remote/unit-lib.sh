@@ -17,8 +17,32 @@ franken_valid_bind_addr() {
 }
 
 # franken_valid_service_user NAME - lowercase account name, max 32 characters.
+# "root" is refused: it would bypass the installer's non-root guard.
 franken_valid_service_user() {
+    [ "$1" = "root" ] && return 1
     [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+}
+
+# franken_gpu_groups [GETENT_CMD] - comma list of the video and render groups
+# that exist on this server (confirmed with getent), empty when neither does.
+franken_gpu_groups() {
+    local getent_cmd="${1:-getent}" g list=""
+    for g in video render; do
+        if "$getent_cmd" group "$g" > /dev/null 2>&1; then
+            list="${list:+$list,}$g"
+        fi
+    done
+    printf '%s' "$list"
+}
+
+# franken_ready_url BIND PORT - Ollama readiness URL for the warmup service.
+# A valid specific BIND address is used; empty, 0.0.0.0 or invalid -> localhost.
+franken_ready_url() {
+    local host="localhost"
+    if [ -n "$1" ] && [ "$1" != "0.0.0.0" ] && franken_valid_bind_addr "$1"; then
+        host="$1"
+    fi
+    printf 'http://%s:%s/api/tags' "$host" "$2"
 }
 
 # franken_valid_memory_max VALUE - positive integer with optional K/M/G/T, or infinity.

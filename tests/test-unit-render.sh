@@ -68,11 +68,12 @@ for v in "192.0.2.10" "127.0.0.1" "0.0.0.0" "255.255.255.255"; do
 done
 
 # --- hostile values: service user -------------------------------------------
-for v in "root; id" "Root" "1abc" "a b" "-lead" "a/b" "\$(id)" "alice
+for v in "root" "ROOT" "Root" "root " " root" "root
+" "root; id" "root:x" "1abc" "a b" "-lead" "a/b" "\$(id)" "alice
 User=root" "$(printf 'a%.0s' {1..33})" ""; do
     check "user rejects [$v]" "rejected" "$(verdict franken_valid_service_user "$v")"
 done
-for v in "frankenllm" "_svc" "a" "svc-1_x" "$(printf 'a%.0s' {1..32})"; do
+for v in "rootx" "xroot" "frankenllm" "_svc" "a" "svc-1_x" "$(printf 'a%.0s' {1..32})"; do
     check "user accepts [$v]" "ok" "$(verdict franken_valid_service_user "$v")"
 done
 
@@ -91,6 +92,21 @@ done
 for v in "512" "1" "infinity"; do
     check "tasks accepts [$v]" "ok" "$(verdict franken_valid_tasks_max "$v")"
 done
+
+# --- warmup readiness URL: bind address when set, localhost otherwise ---------
+check "ready url default" "http://localhost:11434/api/tags" "$(franken_ready_url '' 11434)"
+check "ready url bind set" "http://192.0.2.10:11435/api/tags" "$(franken_ready_url 192.0.2.10 11435)"
+check "ready url 0.0.0.0 -> localhost" "http://localhost:11434/api/tags" "$(franken_ready_url 0.0.0.0 11434)"
+check "ready url invalid bind -> localhost" "http://localhost:11434/api/tags" \
+    "$(franken_ready_url 'evil;id' 11434)"
+
+# --- GPU group list: only groups confirmed present, comma separated ----------
+fake_getent() { [ "$1" = group ] && case "$2" in video|render) return 0 ;; esac; return 1; }
+check "gpu groups both" "video,render" "$(franken_gpu_groups fake_getent)"
+fake_getent() { [ "$1" = group ] && [ "$2" = render ]; }
+check "gpu groups render only" "render" "$(franken_gpu_groups fake_getent)"
+fake_getent() { return 1; }
+check "gpu groups none" "" "$(franken_gpu_groups fake_getent)"
 
 echo "unit-render: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

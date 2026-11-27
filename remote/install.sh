@@ -151,9 +151,21 @@ if [ -n "$SERVICE_USER" ]; then
         sudo useradd --system --create-home --home-dir "/var/lib/$SERVICE_USER" \
             --shell /usr/sbin/nologin "$SERVICE_USER"
     fi
+    if [ "$(id -u "$SERVICE_USER")" -eq 0 ]; then
+        echo "❌ Account $SERVICE_USER has uid 0; refusing to run the units as root"
+        exit 1
+    fi
+    # GPU device nodes are often limited to the video or render group.
+    GPU_GROUPS="$(franken_gpu_groups)"
+    if [ -n "$GPU_GROUPS" ]; then
+        sudo usermod -aG "$GPU_GROUPS" "$SERVICE_USER"
+        echo "✅ Added $SERVICE_USER to groups: $GPU_GROUPS"
+    else
+        echo "⚠️  No video or render group found; GPU access for $SERVICE_USER is unchanged"
+    fi
     UNIT_USER="$SERVICE_USER"
     MODELS_BASE="$(getent passwd "$SERVICE_USER" | cut -d: -f6)/.ollama"
-    else
+else
     UNIT_USER="$USER"
     MODELS_BASE="$HOME/.ollama"
 fi

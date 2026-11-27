@@ -31,6 +31,14 @@ if [[ ! $confirm =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
+# The readiness check uses FRANKEN_BIND_ADDR when set, so validate it first.
+source "$SCRIPT_DIR/unit-lib.sh"
+FRANKEN_BIND_ADDR="${FRANKEN_BIND_ADDR:-}"
+if [ -n "$FRANKEN_BIND_ADDR" ] && ! franken_valid_bind_addr "$FRANKEN_BIND_ADDR"; then
+    echo "❌ FRANKEN_BIND_ADDR must be an IPv4 address (e.g. 192.0.2.10)"
+    exit 1
+fi
+
 # Determine remote install directory
 REMOTE_DIR="$FRANKEN_INSTALL_DIR"
 
@@ -46,6 +54,7 @@ echo "Copying warmup scripts..."
 scp "$SCRIPT_DIR/../bin/warmup-models.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
 scp "$SCRIPT_DIR/../bin/warmup-lib.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
 scp "$SCRIPT_DIR/../bin/warmup-on-boot.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
+scp "$SCRIPT_DIR/unit-lib.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
 
 echo "Making scripts executable..."
 ssh "$FRANKEN_SERVER_IP" "chmod +x $REMOTE_DIR/bin/*.sh"
