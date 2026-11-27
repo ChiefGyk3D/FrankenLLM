@@ -28,6 +28,39 @@ echo ""
 echo "This will install Ollama on the remote server with separate"
 echo "services for each GPU."
 echo ""
+# Optional hardening settings (all unset by default = unchanged behavior).
+# Validate here, before anything is copied to the server.
+source "$SCRIPT_DIR/unit-lib.sh"
+FRANKEN_BIND_ADDR="${FRANKEN_BIND_ADDR:-}"
+FRANKEN_SERVICE_USER="${FRANKEN_SERVICE_USER:-}"
+FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
+FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
+FRANKEN_OLLAMA_VERSION="${FRANKEN_OLLAMA_VERSION:-}"
+if [ -n "$FRANKEN_BIND_ADDR" ] && ! franken_valid_bind_addr "$FRANKEN_BIND_ADDR"; then
+    echo "❌ FRANKEN_BIND_ADDR must be an IPv4 address (e.g. 192.0.2.10)"
+    exit 1
+fi
+if [ -n "$FRANKEN_SERVICE_USER" ] && ! franken_valid_service_user "$FRANKEN_SERVICE_USER"; then
+    echo "❌ FRANKEN_SERVICE_USER must match ^[a-z_][a-z0-9_-]{0,31}$"
+    exit 1
+fi
+if [ -n "$FRANKEN_MEMORY_MAX" ] && ! franken_valid_memory_max "$FRANKEN_MEMORY_MAX"; then
+    echo "❌ FRANKEN_MEMORY_MAX must be a number with optional K/M/G/T (e.g. 24G) or infinity"
+    exit 1
+fi
+if [ -n "$FRANKEN_TASKS_MAX" ] && ! franken_valid_tasks_max "$FRANKEN_TASKS_MAX"; then
+    echo "❌ FRANKEN_TASKS_MAX must be a positive integer or infinity"
+    exit 1
+fi
+if [ -n "$FRANKEN_OLLAMA_VERSION" ] && ! franken_valid_ollama_version "$FRANKEN_OLLAMA_VERSION"; then
+    echo "❌ FRANKEN_OLLAMA_VERSION must look like 0.33.2 or 0.34.0-rc1"
+    exit 1
+fi
+if [ -z "$FRANKEN_OLLAMA_VERSION" ]; then
+    echo "⚠️  Ollama install is unpinned: the latest upstream version will be used."
+    echo "   Set FRANKEN_OLLAMA_VERSION (e.g. 0.33.2) to pin it."
+fi
+
 echo "Press Ctrl+C to cancel, or Enter to continue..."
 read
 
@@ -51,6 +84,25 @@ set -e
 
 GPU0_PORT="${1:-11434}"
 GPU1_PORT="${2:-11435}"
+BIND_ADDR="${3:-}"
+SERVICE_USER="${4:-}"
+MEMORY_MAX="${5:-}"
+TASKS_MAX="${6:-}"
+OLLAMA_PIN="${7:-}"
+
+# --- unit-lib.sh is appended here by remote/install.sh ---
+ENDSCRIPT
+cat "$SCRIPT_DIR/unit-lib.sh" >> /tmp/frankenllm-remote-install.sh
+cat >> /tmp/frankenllm-remote-install.sh << 'ENDSCRIPT'
+
+for v in "$BIND_ADDR:franken_valid_bind_addr" "$SERVICE_USER:franken_valid_service_user" \
+         "$MEMORY_MAX:franken_valid_memory_max" "$TASKS_MAX:franken_valid_tasks_max" \
+         "$OLLAMA_PIN:franken_valid_ollama_version"; do
+    if [ -n "${v%%:*}" ] && ! "${v##*:}" "${v%%:*}"; then
+        echo "❌ Invalid value for ${v##*:}"
+        exit 1
+    fi
+done
 
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║         FrankenLLM Remote Installation Starting...         ║"
@@ -84,11 +136,26 @@ fi
 
 # Install Ollama
 echo "Installing Ollama..."
+# An existing install is kept unless a pin is set and it differs.
+INSTALLED_VERSION=""
 if command -v ollama &> /dev/null; then
+    INSTALLED_VERSION="$(franken_ollama_parse_version "$(ollama --version 2>&1 || true)")"
+fi
+if [ -n "$INSTALLED_VERSION" ] && { [ -z "$OLLAMA_PIN" ] || [ "$INSTALLED_VERSION" = "$OLLAMA_PIN" ]; }; then
     echo "✅ Ollama already installed"
 else
-    curl -fsSL https://ollama.com/install.sh | sh
+    if [ -z "$OLLAMA_PIN" ]; then
+        echo "⚠️  Ollama install is unpinned (set FRANKEN_OLLAMA_VERSION to pin it)"
+    fi
+    # The command is built from a validated version only (checked above).
+    eval "$(franken_ollama_fetch_cmd "$OLLAMA_PIN")"
     echo "✅ Ollama installed"
+fi
+FINAL_VERSION="$(franken_ollama_parse_version "$(ollama --version 2>&1 || true)")"
+echo "Ollama version: ${FINAL_VERSION:-unknown}"
+if [ -n "$OLLAMA_PIN" ] && [ "$FINAL_VERSION" != "$OLLAMA_PIN" ]; then
+    echo "❌ Pinned Ollama $OLLAMA_PIN but the installed version is ${FINAL_VERSION:-unknown}"
+    exit 1
 fi
 echo ""
 
@@ -102,55 +169,52 @@ sudo systemctl daemon-reload
 sudo systemctl mask ollama.service 2>/dev/null || true
 echo "✅ Default ollama.service masked (permanently prevented from starting)"
 
+# Service account: default is the invoking user. FRANKEN_SERVICE_USER creates a
+# system account (nologin shell, own home for models) when it is missing.
+if [ -n "$SERVICE_USER" ]; then
+    if ! id "$SERVICE_USER" &> /dev/null; then
+        echo "Creating system account $SERVICE_USER..."
+        sudo useradd --system --create-home --home-dir "/var/lib/$SERVICE_USER" \
+            --shell /usr/sbin/nologin "$SERVICE_USER"
+    fi
+    if [ "$(id -u "$SERVICE_USER")" -eq 0 ]; then
+        echo "❌ Account $SERVICE_USER has uid 0; refusing to run the units as root"
+        exit 1
+    fi
+    # GPU device nodes are often limited to the video or render group.
+    GPU_GROUPS="$(franken_gpu_groups)"
+    if [ -n "$GPU_GROUPS" ]; then
+        sudo usermod -aG "$GPU_GROUPS" "$SERVICE_USER"
+        echo "✅ Added $SERVICE_USER to groups: $GPU_GROUPS"
+    else
+        echo "⚠️  No video or render group found; GPU access for $SERVICE_USER is unchanged"
+    fi
+    UNIT_USER="$SERVICE_USER"
+    MODELS_BASE="$(getent passwd "$SERVICE_USER" | cut -d: -f6)/.ollama"
+else
+    UNIT_USER="$USER"
+    MODELS_BASE="$HOME/.ollama"
+fi
+
 # Create isolated model directories for each GPU
 echo "Creating isolated model directories..."
-mkdir -p "$HOME/.ollama/models-gpu0"
-mkdir -p "$HOME/.ollama/models-gpu1"
+if [ -n "$SERVICE_USER" ]; then
+    sudo install -d -o "$SERVICE_USER" -m 0750 "$MODELS_BASE" "$MODELS_BASE/models-gpu0" "$MODELS_BASE/models-gpu1"
+else
+    mkdir -p "$MODELS_BASE/models-gpu0"
+    mkdir -p "$MODELS_BASE/models-gpu1"
+fi
 
 # Create systemd service for GPU 0
 echo "Creating systemd service for GPU 0 (port $GPU0_PORT)..."
-sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null << EOF
-[Unit]
-Description=Ollama Service for GPU 0
-After=network-online.target
-
-[Service]
-Type=simple
-User=$USER
-Environment="CUDA_VISIBLE_DEVICES=0"
-Environment="OLLAMA_HOST=0.0.0.0:$GPU0_PORT"
-Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu0"
-Environment="OLLAMA_KEEP_ALIVE=-1"
-ExecStart=/usr/local/bin/ollama serve
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-EOF
+franken_render_unit 0 "$GPU0_PORT" "$MODELS_BASE/models-gpu0" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" \
+    | sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null
 
 if [ "$GPU_COUNT" -ge 2 ]; then
     # Create systemd service for GPU 1
     echo "Creating systemd service for GPU 1 (port $GPU1_PORT)..."
-    sudo tee /etc/systemd/system/ollama-gpu1.service > /dev/null << EOF
-[Unit]
-Description=Ollama Service for GPU 1
-After=network-online.target
-
-[Service]
-Type=simple
-User=$USER
-Environment="CUDA_VISIBLE_DEVICES=1"
-Environment="OLLAMA_HOST=0.0.0.0:$GPU1_PORT"
-Environment="OLLAMA_MODELS=$HOME/.ollama/models-gpu1"
-Environment="OLLAMA_KEEP_ALIVE=-1"
-ExecStart=/usr/local/bin/ollama serve
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-EOF
+    franken_render_unit 1 "$GPU1_PORT" "$MODELS_BASE/models-gpu1" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" \
+        | sudo tee /etc/systemd/system/ollama-gpu1.service > /dev/null
 fi
 
 # Reload systemd
@@ -177,9 +241,9 @@ echo "║                Installation Complete! ✅                    ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Services available at:"
-echo "  - GPU 0: http://0.0.0.0:$GPU0_PORT"
+echo "  - GPU 0: http://${BIND_ADDR:-0.0.0.0}:$GPU0_PORT"
 if [ "$GPU_COUNT" -ge 2 ]; then
-    echo "  - GPU 1: http://0.0.0.0:$GPU1_PORT"
+    echo "  - GPU 1: http://${BIND_ADDR:-0.0.0.0}:$GPU1_PORT"
 fi
 echo ""
 echo "⚠️  Note: Auto-warmup service will be configured from your local machine."
@@ -196,7 +260,7 @@ echo "Connecting to $FRANKEN_SERVER_IP and running installation..."
 echo "You will be prompted for sudo password on the remote server."
 echo ""
 
-ssh -t "$FRANKEN_SERVER_IP" "bash /tmp/frankenllm-remote-install.sh $FRANKEN_GPU0_PORT $FRANKEN_GPU1_PORT && rm /tmp/frankenllm-remote-install.sh"
+ssh -t "$FRANKEN_SERVER_IP" "bash /tmp/frankenllm-remote-install.sh $FRANKEN_GPU0_PORT $FRANKEN_GPU1_PORT '$FRANKEN_BIND_ADDR' '$FRANKEN_SERVICE_USER' '$FRANKEN_MEMORY_MAX' '$FRANKEN_TASKS_MAX' '$FRANKEN_OLLAMA_VERSION' && rm /tmp/frankenllm-remote-install.sh"
 
 # Cleanup local temp file
 rm /tmp/frankenllm-remote-install.sh

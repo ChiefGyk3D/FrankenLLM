@@ -250,4 +250,17 @@ check "vulkan invalid (remote path): fails" 1 "$RC"
 check "vulkan invalid (remote path): no ssh/sudo calls" "no" "$([ -s "$WORK/calls.log" ] && echo yes || echo no)"
 
 echo "passed: $PASS  failed: $FAIL"
-[ "$FAIL" -eq 0 ]
+
+# --- 13. Unit-render test (run here so the existing CI command covers it) -----
+bash "$REPO/tests/test-unit-render.sh"
+UNIT_RC=$?
+
+# --- 14. Ollama version pin test ----------------------------------------------
+bash "$REPO/tests/test-ollama-pin.sh"
+PIN_RC=$?
+
+# --- 15. Model-script bind address test ---------------------------------------
+bash "$REPO/tests/test-model-host.sh"
+HOST_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ]
