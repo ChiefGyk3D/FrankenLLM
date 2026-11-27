@@ -39,53 +39,63 @@ if [ -n "$FRANKEN_BIND_ADDR" ] && ! franken_valid_bind_addr "$FRANKEN_BIND_ADDR"
     exit 1
 fi
 
-# Determine remote install directory
+# The install directory ends up in remote commands and in unit directives, so it
+# must be an absolute, normalized path with a conservative character set. The
+# host must look like a host (never an ssh option).
 REMOTE_DIR="$FRANKEN_INSTALL_DIR"
+if ! franken_valid_install_dir "$REMOTE_DIR"; then
+    echo "❌ FRANKEN_INSTALL_DIR must be an absolute path of letters, digits, . _ - and / only"
+    echo "   (no empty, . or .. components; at most 200 characters)"
+    exit 1
+fi
+if ! franken_valid_ssh_host "$FRANKEN_SERVER_IP"; then
+    echo "❌ FRANKEN_SERVER_IP must be a host name or address (optionally user@host)"
+    exit 1
+fi
 
 echo ""
 echo "Creating remote directory structure..."
-ssh -t "$FRANKEN_SERVER_IP" "sudo mkdir -p $REMOTE_DIR/bin && sudo chown \$USER:\$USER $REMOTE_DIR $REMOTE_DIR/bin"
+ssh -t -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote bash -c \
+    'sudo mkdir -p -- "$1/bin" && sudo chown "$(id -un):$(id -gn)" "$1" "$1/bin"' _ "$REMOTE_DIR")"
 
 echo "Copying configuration files..."
-scp "$SCRIPT_DIR/../.env" "$FRANKEN_SERVER_IP:$REMOTE_DIR/.env"
-scp "$SCRIPT_DIR/../config.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/config.sh"
+scp -- "$SCRIPT_DIR/../.env" "$FRANKEN_SERVER_IP:$REMOTE_DIR/.env"
+scp -- "$SCRIPT_DIR/../config.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/config.sh"
 
 echo "Copying warmup scripts..."
-scp "$SCRIPT_DIR/../bin/warmup-models.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
-scp "$SCRIPT_DIR/../bin/warmup-lib.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
-scp "$SCRIPT_DIR/../bin/warmup-on-boot.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
-scp "$SCRIPT_DIR/unit-lib.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
+scp -- "$SCRIPT_DIR/../bin/warmup-models.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
+scp -- "$SCRIPT_DIR/../bin/warmup-lib.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
+scp -- "$SCRIPT_DIR/../bin/warmup-on-boot.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
+scp -- "$SCRIPT_DIR/unit-lib.sh" "$FRANKEN_SERVER_IP:$REMOTE_DIR/bin/"
 
 echo "Making scripts executable..."
-ssh "$FRANKEN_SERVER_IP" "chmod +x $REMOTE_DIR/bin/*.sh"
+ssh -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote bash -c 'chmod +x -- "$1"/bin/*.sh' _ "$REMOTE_DIR")"
 
 echo ""
 echo "Creating systemd service on remote server..."
 echo "You may be prompted for your sudo password..."
 
-ssh -t "$FRANKEN_SERVER_IP" "sudo tee /etc/systemd/system/frankenllm-warmup.service > /dev/null << 'EOF'
-[Unit]
-Description=FrankenLLM Model Warmup
-After=ollama-gpu0.service ollama-gpu1.service
-Wants=ollama-gpu0.service ollama-gpu1.service
-
-[Service]
-Type=oneshot
-User=$USER
-WorkingDirectory=$REMOTE_DIR
-ExecStart=$REMOTE_DIR/bin/warmup-on-boot.sh
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-"
+# The unit is rendered ON the server from the copied unit-lib.sh, which
+# revalidates the directory and the account name (franken_render_warmup_unit),
+# is checked with systemd-analyze when available, and is installed atomically.
+RENDER_SCRIPT='set -e
+d=$1
+lib="$d/bin/unit-lib.sh"
+if [ ! -f "$lib" ] || [ -L "$lib" ] || [ "$(stat -c %u "$lib")" != "$(id -u)" ]; then
+    echo "unit-lib.sh is missing or not owned by you" >&2; exit 1
+fi
+. "$lib"
+tmp=$(mktemp)
+trap "rm -f \"$tmp\"" EXIT
+franken_render_warmup_unit "$d" "$(id -un)" > "$tmp"
+if command -v systemd-analyze > /dev/null 2>&1; then systemd-analyze verify "$tmp"; fi
+sudo install -m 0644 -o root -g root "$tmp" /etc/systemd/system/.frankenllm-warmup.service.new
+sudo mv -f /etc/systemd/system/.frankenllm-warmup.service.new /etc/systemd/system/frankenllm-warmup.service'
+ssh -t -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote bash -c "$RENDER_SCRIPT" _ "$REMOTE_DIR")"
 
 echo ""
 echo "Enabling warmup service..."
-ssh -t "$FRANKEN_SERVER_IP" "sudo systemctl daemon-reload && sudo systemctl enable frankenllm-warmup.service"
+ssh -t -- "$FRANKEN_SERVER_IP" "sudo systemctl daemon-reload && sudo systemctl enable frankenllm-warmup.service"
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"

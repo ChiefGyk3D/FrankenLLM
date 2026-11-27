@@ -55,10 +55,13 @@ HOSTILE=("plain" "a b" "it's" "'" "''" "a'b'c" '$(touch PWNED)' '`touch PWNED`' 
          "x && touch PWNED" 'x | touch PWNED' '"quoted"' '\' '\n' '*' '?[a]' '~' '$HOME' '${IFS}' \
          "line1
 line2" "-n" "--" "")
-source <(sed -n '/^franken_sh_quote()/,/^}/p' "$REPO/config.sh")
+# q ARG... - franken_sh_quote from config.sh, run in its own shell
+q() {
+    bash -c 'source <(sed -n "/^franken_sh_quote()/,/^}/p" "$1"); shift; franken_sh_quote "$@"' _ "$REPO/config.sh" "$@"
+}
 for h in "${HOSTILE[@]}"; do
     rm -f "$WORK/cwd/PWNED"
-    got=$(cd "$WORK/cwd" && sh -c "printf '%s|' $(franken_sh_quote "$h" second)")
+    got=$(cd "$WORK/cwd" && sh -c "printf '%s|' $(q "$h" second)")
     check "quote round trip [${h//$'\n'/NL}]" "$h|second|" "$got"
     check "quote runs nothing [${h//$'\n'/NL}]" "no" "$([ -e "$WORK/cwd/PWNED" ] && echo yes || echo no)"
 done

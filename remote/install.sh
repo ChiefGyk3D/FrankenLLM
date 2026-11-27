@@ -2,9 +2,11 @@
 # FrankenLLM - Remote Installation
 # Stitched-together GPUs, but it lives!
 #
-# This script copies the local installer to a remote server and runs it there
+# This script copies the server-side installer (remote/server-install.sh, joined
+# with remote/unit-lib.sh) to a private directory on the target server, checks
+# the copy, and runs it there.
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
@@ -16,18 +18,6 @@ if [ "$FRANKEN_IS_LOCAL" = true ]; then
     exit 1
 fi
 
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║           FrankenLLM - Remote Installation                 ║"
-echo "║        Stitched-together GPUs, but it lives!               ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-echo ""
-echo "Target Server: $FRANKEN_SERVER_IP"
-echo "GPU 0 Port: $FRANKEN_GPU0_PORT"
-echo "GPU 1 Port: $FRANKEN_GPU1_PORT"
-echo ""
-echo "This will install Ollama on the remote server with separate"
-echo "services for each GPU."
-echo ""
 # Optional hardening settings (all unset by default = unchanged behavior).
 # Validate here, before anything is copied to the server.
 source "$SCRIPT_DIR/unit-lib.sh"
@@ -37,6 +27,14 @@ FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
 FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
 FRANKEN_OLLAMA_VERSION="${FRANKEN_OLLAMA_VERSION:-}"
 FRANKEN_REQUIRE_GPU="${FRANKEN_REQUIRE_GPU:-}"
+if ! franken_valid_ssh_host "$FRANKEN_SERVER_IP"; then
+    echo "❌ FRANKEN_SERVER_IP must be a host name or address (optionally user@host)"
+    exit 1
+fi
+if ! franken_valid_port "$FRANKEN_GPU0_PORT" || ! franken_valid_port "$FRANKEN_GPU1_PORT"; then
+    echo "❌ FRANKEN_GPU0_PORT and FRANKEN_GPU1_PORT must be decimal numbers from 1 to 65535"
+    exit 1
+fi
 if [ -n "$FRANKEN_BIND_ADDR" ] && ! franken_valid_bind_addr "$FRANKEN_BIND_ADDR"; then
     echo "❌ FRANKEN_BIND_ADDR must be an IPv4 address (e.g. 192.0.2.10)"
     exit 1
@@ -66,12 +64,25 @@ if [ -z "$FRANKEN_OLLAMA_VERSION" ]; then
     echo "   Set FRANKEN_OLLAMA_VERSION (e.g. 0.33.2) to pin it."
 fi
 
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║           FrankenLLM - Remote Installation                 ║"
+echo "║        Stitched-together GPUs, but it lives!               ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "Target Server: $FRANKEN_SERVER_IP"
+echo "GPU 0 Port: $FRANKEN_GPU0_PORT"
+echo "GPU 1 Port: $FRANKEN_GPU1_PORT"
+echo ""
+echo "This will install Ollama on the remote server with separate"
+echo "services for each GPU."
+echo ""
+
 echo "Press Ctrl+C to cancel, or Enter to continue..."
-read
+read -r _
 
 # Test SSH connection
 echo "Testing SSH connection to $FRANKEN_SERVER_IP..."
-if ! ssh -q "$FRANKEN_SERVER_IP" exit; then
+if ! ssh -q -- "$FRANKEN_SERVER_IP" exit; then
     echo "❌ Cannot connect to $FRANKEN_SERVER_IP via SSH"
     echo "   Make sure:"
     echo "   1. The server is reachable"
@@ -82,207 +93,61 @@ fi
 echo "✅ SSH connection successful"
 echo ""
 
-# Create the installation script
-cat > /tmp/frankenllm-remote-install.sh << 'ENDSCRIPT'
-#!/bin/bash
-set -e
-
-GPU0_PORT="${1:-11434}"
-GPU1_PORT="${2:-11435}"
-BIND_ADDR="${3:-}"
-SERVICE_USER="${4:-}"
-MEMORY_MAX="${5:-}"
-TASKS_MAX="${6:-}"
-OLLAMA_PIN="${7:-}"
-REQUIRE_GPU="${8:-}"
-
-# --- unit-lib.sh is appended here by remote/install.sh ---
-ENDSCRIPT
-cat "$SCRIPT_DIR/unit-lib.sh" >> /tmp/frankenllm-remote-install.sh
-cat >> /tmp/frankenllm-remote-install.sh << 'ENDSCRIPT'
-
-for v in "$BIND_ADDR:franken_valid_bind_addr" "$SERVICE_USER:franken_valid_service_user" \
-         "$MEMORY_MAX:franken_valid_memory_max" "$TASKS_MAX:franken_valid_tasks_max" \
-         "$OLLAMA_PIN:franken_valid_ollama_version" "$REQUIRE_GPU:franken_valid_require_gpu"; do
-    if [ -n "${v%%:*}" ] && ! "${v##*:}" "${v%%:*}"; then
-        echo "❌ Invalid value for ${v##*:}"
-        exit 1
+# Build the script to run on the server in a private local file (mktemp: mode
+# 0600, unpredictable name), never at a fixed path.
+PAYLOAD="$(mktemp)"
+REMOTE_DIR=""
+cleanup() {
+    rm -f -- "$PAYLOAD"
+    if [ -n "$REMOTE_DIR" ]; then
+        ssh -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote rm -rf -- "$REMOTE_DIR")" > /dev/null 2>&1 || true
     fi
-done
+}
+trap cleanup EXIT
+{
+    echo '#!/bin/bash'
+    cat "$SCRIPT_DIR/unit-lib.sh" "$SCRIPT_DIR/server-install.sh"
+} > "$PAYLOAD"
+LOCAL_SHA="$(franken_sha256_file "$PAYLOAD")"
 
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║         FrankenLLM Remote Installation Starting...         ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-echo ""
-
-# Check if running as root
-if [ "$EUID" -eq 0 ]; then
-    echo "❌ Please do not run this script as root"
-    echo "   The script will ask for sudo password when needed"
+# A private directory on the server: unpredictable name, mode 0700, owned by
+# the operator. Another local account can neither pre-create nor swap the file.
+echo "Preparing a private directory on $FRANKEN_SERVER_IP..."
+REMOTE_DIR="$(ssh -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote sh -c 'd=$(mktemp -d) && chmod 700 "$d" && printf "%s\n" "$d"')")"
+if ! [[ "$REMOTE_DIR" =~ ^/[A-Za-z0-9/_.-]+$ ]]; then
+    REMOTE_DIR=""
+    echo "❌ Unexpected reply while creating the remote directory"
     exit 1
 fi
 
-# Check for NVIDIA GPUs
-echo "Checking for NVIDIA GPUs..."
-if ! command -v nvidia-smi &> /dev/null; then
-    echo "❌ nvidia-smi not found. Please install NVIDIA drivers first."
-    exit 1
-fi
-
-# Absolute nvidia-smi path for the optional ExecStartPre guard (systemd needs
-# an absolute path). Only resolved and checked when the guard is on.
-NVIDIA_SMI_PATH=""
-if [ "$REQUIRE_GPU" = "true" ]; then
-    NVIDIA_SMI_PATH="$(command -v nvidia-smi || true)"
-    if ! franken_valid_nvidia_smi_path "$NVIDIA_SMI_PATH"; then
-        echo "❌ FRANKEN_REQUIRE_GPU=true but nvidia-smi has no usable absolute path (found: '${NVIDIA_SMI_PATH}')"
-        echo "   It must match ^/[A-Za-z0-9/_.-]+$ ; install the NVIDIA driver tools or unset the guard."
-        exit 1
-    fi
-    echo "✅ GPU guard on: units will run $NVIDIA_SMI_PATH -L before ollama starts"
-fi
-
-GPU_COUNT=$(nvidia-smi --list-gpus | wc -l)
-echo "✅ Found $GPU_COUNT NVIDIA GPU(s)"
-nvidia-smi --list-gpus
-echo ""
-
-if [ "$GPU_COUNT" -lt 2 ]; then
-    echo "⚠️  Warning: FrankenLLM is designed for 2 GPUs, but only $GPU_COUNT found."
-    echo "   Installation will continue, but you'll only have one Ollama instance."
-    echo ""
-fi
-
-# Install Ollama
-echo "Installing Ollama..."
-# An existing install is kept unless a pin is set and it differs.
-INSTALLED_VERSION=""
-if command -v ollama &> /dev/null; then
-    INSTALLED_VERSION="$(franken_ollama_parse_version "$(ollama --version 2>&1 || true)")"
-fi
-if [ -n "$INSTALLED_VERSION" ] && { [ -z "$OLLAMA_PIN" ] || [ "$INSTALLED_VERSION" = "$OLLAMA_PIN" ]; }; then
-    echo "✅ Ollama already installed"
-else
-    if [ -z "$OLLAMA_PIN" ]; then
-        echo "⚠️  Ollama install is unpinned (set FRANKEN_OLLAMA_VERSION to pin it)"
-    fi
-    # The command is built from a validated version only (checked above).
-    eval "$(franken_ollama_fetch_cmd "$OLLAMA_PIN")"
-    echo "✅ Ollama installed"
-fi
-FINAL_VERSION="$(franken_ollama_parse_version "$(ollama --version 2>&1 || true)")"
-echo "Ollama version: ${FINAL_VERSION:-unknown}"
-if [ -n "$OLLAMA_PIN" ] && [ "$FINAL_VERSION" != "$OLLAMA_PIN" ]; then
-    echo "❌ Pinned Ollama $OLLAMA_PIN but the installed version is ${FINAL_VERSION:-unknown}"
-    exit 1
-fi
-echo ""
-
-# Disable and MASK default Ollama service to prevent it from ever starting
-# (even after Ollama updates which may try to re-enable it)
-echo "Disabling and masking default ollama service..."
-sudo systemctl stop ollama.service 2>/dev/null || true
-sudo systemctl disable ollama.service 2>/dev/null || true
-sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
-sudo systemctl daemon-reload
-sudo systemctl mask ollama.service 2>/dev/null || true
-echo "✅ Default ollama.service masked (permanently prevented from starting)"
-
-# Service account: default is the invoking user. FRANKEN_SERVICE_USER creates a
-# system account (nologin shell, own home for models) when it is missing.
-if [ -n "$SERVICE_USER" ]; then
-    if ! id "$SERVICE_USER" &> /dev/null; then
-        echo "Creating system account $SERVICE_USER..."
-        sudo useradd --system --create-home --home-dir "/var/lib/$SERVICE_USER" \
-            --shell /usr/sbin/nologin "$SERVICE_USER"
-    fi
-    if [ "$(id -u "$SERVICE_USER")" -eq 0 ]; then
-        echo "❌ Account $SERVICE_USER has uid 0; refusing to run the units as root"
-        exit 1
-    fi
-    # GPU device nodes are often limited to the video or render group.
-    GPU_GROUPS="$(franken_gpu_groups)"
-    if [ -n "$GPU_GROUPS" ]; then
-        sudo usermod -aG "$GPU_GROUPS" "$SERVICE_USER"
-        echo "✅ Added $SERVICE_USER to groups: $GPU_GROUPS"
-    else
-        echo "⚠️  No video or render group found; GPU access for $SERVICE_USER is unchanged"
-    fi
-    UNIT_USER="$SERVICE_USER"
-    MODELS_BASE="$(getent passwd "$SERVICE_USER" | cut -d: -f6)/.ollama"
-else
-    UNIT_USER="$USER"
-    MODELS_BASE="$HOME/.ollama"
-fi
-
-# Create isolated model directories for each GPU
-echo "Creating isolated model directories..."
-if [ -n "$SERVICE_USER" ]; then
-    sudo install -d -o "$SERVICE_USER" -m 0750 "$MODELS_BASE" "$MODELS_BASE/models-gpu0" "$MODELS_BASE/models-gpu1"
-else
-    mkdir -p "$MODELS_BASE/models-gpu0"
-    mkdir -p "$MODELS_BASE/models-gpu1"
-fi
-
-# Create systemd service for GPU 0
-echo "Creating systemd service for GPU 0 (port $GPU0_PORT)..."
-franken_render_unit 0 "$GPU0_PORT" "$MODELS_BASE/models-gpu0" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" "$REQUIRE_GPU" "$NVIDIA_SMI_PATH" \
-    | sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null
-
-if [ "$GPU_COUNT" -ge 2 ]; then
-    # Create systemd service for GPU 1
-    echo "Creating systemd service for GPU 1 (port $GPU1_PORT)..."
-    franken_render_unit 1 "$GPU1_PORT" "$MODELS_BASE/models-gpu1" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" "$REQUIRE_GPU" "$NVIDIA_SMI_PATH" \
-        | sudo tee /etc/systemd/system/ollama-gpu1.service > /dev/null
-fi
-
-# Reload systemd
-echo "Reloading systemd..."
-sudo systemctl daemon-reload
-
-# Start services
-echo "Starting services..."
-sudo systemctl start ollama-gpu0
-if [ "$GPU_COUNT" -ge 2 ]; then
-    sudo systemctl start ollama-gpu1
-fi
-
-# Enable on boot
-echo "Enabling services on boot..."
-sudo systemctl enable ollama-gpu0
-if [ "$GPU_COUNT" -ge 2 ]; then
-    sudo systemctl enable ollama-gpu1
-fi
-
-echo ""
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║                Installation Complete! ✅                    ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-echo ""
-echo "Services available at:"
-echo "  - GPU 0: http://${BIND_ADDR:-0.0.0.0}:$GPU0_PORT"
-if [ "$GPU_COUNT" -ge 2 ]; then
-    echo "  - GPU 1: http://${BIND_ADDR:-0.0.0.0}:$GPU1_PORT"
-fi
-echo ""
-echo "⚠️  Note: Auto-warmup service will be configured from your local machine."
-echo "Check status: sudo systemctl status ollama-gpu0 ollama-gpu1"
-ENDSCRIPT
-
-# Copy script to remote server
 echo "Copying installation script to $FRANKEN_SERVER_IP..."
-scp /tmp/frankenllm-remote-install.sh "$FRANKEN_SERVER_IP:/tmp/" > /dev/null 2>&1
+scp -q -- "$PAYLOAD" "$FRANKEN_SERVER_IP:$REMOTE_DIR/install.sh"
 
-# SSH into remote and run installation
+# Verify the copy before running it: directory and file are regular, owned by
+# the operator, private; and the content hash matches the local one.
+VERIFY_SCRIPT='d=$1; f=$d/install.sh; me=$(id -u)
+[ -d "$d" ] && [ ! -L "$d" ] && [ "$(stat -c %u "$d")" = "$me" ] && [ "$(stat -c %a "$d")" = 700 ] &&
+[ -f "$f" ] && [ ! -L "$f" ] && [ "$(stat -c %u "$f")" = "$me" ] &&
+chmod 700 "$f" && [ "$(stat -c %a "$f")" = 700 ] &&
+[ "$(sha256sum "$f" | cut -d" " -f1)" = "$2" ]'
+if ! ssh -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote bash -c "$VERIFY_SCRIPT" _ "$REMOTE_DIR" "$LOCAL_SHA")"; then
+    echo "❌ The copy on $FRANKEN_SERVER_IP failed verification (owner, mode, type or hash); not running it"
+    exit 1
+fi
+echo "✅ Copy verified"
+
+# SSH into remote and run installation. Every value is passed as one quoted
+# argument; the remote directory is removed when the script ends.
 echo ""
 echo "Connecting to $FRANKEN_SERVER_IP and running installation..."
 echo "You will be prompted for sudo password on the remote server."
 echo ""
 
-ssh -t "$FRANKEN_SERVER_IP" "bash /tmp/frankenllm-remote-install.sh $FRANKEN_GPU0_PORT $FRANKEN_GPU1_PORT '$FRANKEN_BIND_ADDR' '$FRANKEN_SERVICE_USER' '$FRANKEN_MEMORY_MAX' '$FRANKEN_TASKS_MAX' '$FRANKEN_OLLAMA_VERSION' '$FRANKEN_REQUIRE_GPU' && rm /tmp/frankenllm-remote-install.sh"
-
-# Cleanup local temp file
-rm /tmp/frankenllm-remote-install.sh
+RUN_SCRIPT='d=$1; shift; trap "rm -rf -- \"\$d\"" EXIT; bash "$d/install.sh" "$@"'
+ssh -t -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote bash -c "$RUN_SCRIPT" _ "$REMOTE_DIR" \
+    "$FRANKEN_GPU0_PORT" "$FRANKEN_GPU1_PORT" "$FRANKEN_BIND_ADDR" "$FRANKEN_SERVICE_USER" \
+    "$FRANKEN_MEMORY_MAX" "$FRANKEN_TASKS_MAX" "$FRANKEN_OLLAMA_VERSION" "$FRANKEN_REQUIRE_GPU")"
+REMOTE_DIR=""
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"

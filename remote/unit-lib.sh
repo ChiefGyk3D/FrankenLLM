@@ -18,6 +18,7 @@ franken_valid_bind_addr() {
 
 # franken_valid_port VALUE - decimal integer 1..65535, no sign, no leading zero.
 franken_valid_port() {
+    local LC_ALL=C   # byte-wise character classes, not locale ranges
     [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]
 }
 
@@ -25,12 +26,14 @@ franken_valid_port() {
 # digits, dot, dash, underscore, colon and slash; must start with a letter or
 # digit (so it can never look like an option); at most 255 characters.
 franken_valid_model_name() {
+    local LC_ALL=C   # byte-wise character classes, not locale ranges
     [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$ ]]
 }
 
 # franken_valid_install_dir PATH - absolute, normalized, conservative characters:
 # no "." or ".." components, no empty components, not "/", at most 200 characters.
 franken_valid_install_dir() {
+    local LC_ALL=C   # byte-wise character classes, not locale ranges
     local p="$1" part
     local -a parts
     [ "${#p}" -le 200 ] || return 1
@@ -47,6 +50,7 @@ franken_valid_install_dir() {
 # franken_valid_service_user NAME - lowercase account name, max 32 characters.
 # "root" is refused: it would bypass the installer's non-root guard.
 franken_valid_service_user() {
+    local LC_ALL=C   # byte-wise character classes, not locale ranges
     [ "$1" = "root" ] && return 1
     [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
 }
@@ -176,4 +180,47 @@ UNIT
 WantedBy=default.target
 UNIT
     return 0
+}
+
+# franken_valid_ssh_host VALUE - [user@]host as ssh accepts it, conservative
+# characters, never starting with "-" (so it cannot become an ssh option).
+franken_valid_ssh_host() {
+    local LC_ALL=C   # byte-wise character classes, not locale ranges
+    [[ "$1" =~ ^([A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] && [ "${#1}" -le 255 ]
+}
+
+# franken_sha256_file FILE - hex sha256 of FILE (sha256sum, else shasum).
+franken_sha256_file() {
+    if command -v sha256sum > /dev/null 2>&1; then
+        sha256sum -- "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 -- "$1" | cut -d' ' -f1
+    fi
+}
+
+# franken_render_warmup_unit DIR USER - prints the warmup unit. Revalidates both
+# values (install dir policy, service account name) and prints nothing, return 1,
+# when either is unsafe: no newline or other directive can reach the unit.
+franken_render_warmup_unit() {
+    local dir="$1" user="$2"
+    franken_valid_install_dir "$dir" || return 1
+    [[ "$user" =~ ^[A-Za-z_][A-Za-z0-9_.-]{0,63}$ ]] || return 1
+    cat << UNIT
+[Unit]
+Description=FrankenLLM Model Warmup
+After=ollama-gpu0.service ollama-gpu1.service
+Wants=ollama-gpu0.service ollama-gpu1.service
+
+[Service]
+Type=oneshot
+User=$user
+WorkingDirectory=$dir
+ExecStart=$dir/bin/warmup-on-boot.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
 }

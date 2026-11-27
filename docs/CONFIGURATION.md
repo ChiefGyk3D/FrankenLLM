@@ -126,6 +126,23 @@ keeps the current behavior (bind `0.0.0.0`, units run as the invoking user, no
 resource caps). Each is validated before anything is copied to the server or
 written to a unit; an invalid value stops the install.
 
+How the installer reaches the server: `remote/install.sh` joins
+`remote/unit-lib.sh` and `remote/server-install.sh` into one script, creates a
+private directory on the server (`mktemp -d`, mode 0700), copies the script into
+it, and checks the copy before running it (directory and file are regular, not
+links, owned by you, mode 0700, and the sha256 matches the hash computed on your
+workstation). The script runs from that path and the directory is removed when it
+ends, also on failure. Nothing is written to a fixed path under `/tmp`. Every
+value (ports, bind address, account name, limits, version) is sent as one quoted
+argument, never spliced into a command string. `FRANKEN_GPU0_PORT` and
+`FRANKEN_GPU1_PORT` must be decimal numbers from 1 to 65535 and `FRANKEN_SERVER_IP`
+must be a host name or address (optionally `user@host`), checked on the workstation
+and again on the server. `remote/setup-warmup.sh` requires `FRANKEN_INSTALL_DIR` to
+be an absolute path of letters, digits, `.`, `_`, `-` and `/` with no empty, `.` or
+`..` components (at most 200 characters); the warmup unit is rendered on the server
+after the same check, verified with `systemd-analyze` when it exists, and installed
+by an atomic rename. Covered by `tests/test-remote-transport.sh`.
+
 ```bash
 # IPv4 address Ollama binds to; written with the port into OLLAMA_HOST
 FRANKEN_BIND_ADDR=192.0.2.10

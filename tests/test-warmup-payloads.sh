@@ -271,4 +271,8 @@ ENV_RC=$?
 bash "$REPO/tests/test-exec-args.sh"
 EXEC_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ] && [ "$EXEC_RC" -eq 0 ]
+# --- 18. Remote transport: private directory, quoting, install dir ------------
+bash "$REPO/tests/test-remote-transport.sh"
+TRANSPORT_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ] && [ "$EXEC_RC" -eq 0 ] && [ "$TRANSPORT_RC" -eq 0 ]
