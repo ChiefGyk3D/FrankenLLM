@@ -108,19 +108,129 @@ franken_valid_ollama_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]
 }
 
-# franken_ollama_fetch_cmd [VERSION] - prints the command line that fetches and
-# runs the upstream installer; nothing is executed here. A non-empty VERSION
-# (validated, else return 1) is set as OLLAMA_VERSION for the piped shell.
-# The upstream script has no checksum step: a pin gives a reproducible version,
-# not integrity.
-franken_ollama_fetch_cmd() {
-    local url="https://ollama.com/install.sh"
-    if [ -z "${1:-}" ]; then
-        printf 'curl -fsSL %s | sh\n' "$url"
-        return 0
-    fi
+# franken_valid_sha256 VALUE - 64 lowercase hex characters.
+franken_valid_sha256() {
+    local LC_ALL=C   # byte-wise character classes, not locale ranges
+    [[ "$1" =~ ^[0-9a-f]{64}$ ]]
+}
+
+# franken_ollama_asset - release asset name for this machine's architecture
+# (the upstream installer's own x86_64 -> amd64, aarch64/arm64 -> arm64 mapping).
+franken_ollama_asset() {
+    case "$(uname -m)" in
+        x86_64) echo "ollama-linux-amd64.tar.zst" ;;
+        aarch64|arm64) echo "ollama-linux-arm64.tar.zst" ;;
+        *) return 1 ;;
+    esac
+}
+
+# franken_ollama_asset_url VERSION ASSET - the one place the download URL is
+# built: https only, GitHub release of the pinned version, validated pieces.
+franken_ollama_asset_url() {
+    local LC_ALL=C
     franken_valid_ollama_version "$1" || return 1
-    printf 'curl -fsSL %s | OLLAMA_VERSION=%s sh\n' "$url" "$1"
+    [[ "$2" =~ ^ollama-linux-[a-z0-9]+\.tar\.zst$ ]] || return 1
+    printf 'https://github.com/ollama/ollama/releases/download/v%s/%s\n' "$1" "$2"
+}
+
+# franken_ollama_checksum_lookup VERSION ASSET TABLE - prints the sha256 recorded
+# in TABLE ("version asset sha256" per line, # comments) for exactly this version
+# and asset; returns 1 when there is no valid entry.
+franken_ollama_checksum_lookup() {
+    local version="$1" asset="$2" table="$3" v a h rest
+    [ -f "$table" ] || return 1
+    while read -r v a h rest; do
+        case "$v" in ''|'#'*) continue ;; esac
+        if [ "$v" = "$version" ] && [ "$a" = "$asset" ] && [ -z "$rest" ] && franken_valid_sha256 "$h"; then
+            printf '%s\n' "$h"
+            return 0
+        fi
+    done < "$table"
+    return 1
+}
+
+# franken_ollama_download URL OUTFILE - https only, redirects stay on https.
+franken_ollama_download() {
+    [[ "$1" == https://* ]] || return 1
+    curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+        --max-time 1800 --output "$2" -- "$1"
+}
+
+# franken_ollama_install_verified VERSION SHA256 ASSET ROOT [PRIVILEGE_CMD...]
+# Downloads the pinned release asset, verifies its sha256 BEFORE anything is
+# decompressed or extracted, checks the archive member names, and only then
+# replaces ROOT/lib/ollama and extracts into ROOT (the layout of the upstream
+# installer: ROOT/bin/ollama and ROOT/lib/ollama). PRIVILEGE_CMD (e.g. sudo) is
+# put in front of the commands that write under ROOT. No account or service is
+# created. Needs curl, zstd, tar and sha256sum; says so when one is missing.
+franken_ollama_install_verified() {
+    local version="$1" sha="$2" asset="$3" root="$4" url tool
+    shift 4
+    local -a priv=("$@")
+    url="$(franken_ollama_asset_url "$version" "$asset")" || { echo "❌ Invalid Ollama version or asset name"; return 1; }
+    franken_valid_sha256 "$sha" || { echo "❌ The expected checksum is not a sha256 (64 lowercase hex characters)"; return 1; }
+    if ! [[ "$root" =~ ^/[A-Za-z0-9/_.-]+$ ]] || [ "$root" = "/" ]; then
+        echo "❌ Invalid install root"
+        return 1
+    fi
+    for tool in curl tar sha256sum; do
+        command -v "$tool" > /dev/null 2>&1 || { echo "❌ $tool is required to install Ollama but was not found"; return 1; }
+    done
+    if ! command -v zstd > /dev/null 2>&1; then
+        echo "❌ zstd is required to unpack the Ollama release but was not found."
+        echo "   Install it first (Debian/Ubuntu: sudo apt-get install zstd; Fedora/RHEL: sudo dnf install zstd)."
+        return 1
+    fi
+    (
+        work="$(mktemp -d)" || exit 1
+        trap 'rm -rf -- "$work"' EXIT
+        echo "Downloading $url"
+        franken_ollama_download "$url" "$work/$asset" || { echo "❌ Download failed"; exit 1; }
+        actual="$(franken_sha256_file "$work/$asset")"
+        if [ "$actual" != "$sha" ]; then
+            echo "❌ Checksum mismatch for $asset: expected $sha, got $actual. Nothing was extracted."
+            exit 1
+        fi
+        echo "✅ sha256 verified for $asset"
+        zstd -d -q -c -- "$work/$asset" > "$work/ollama.tar" || { echo "❌ Could not decompress the archive"; exit 1; }
+        # Member names must stay under ROOT; links must not point outside; no devices.
+        names="$(tar -tf "$work/ollama.tar")" || { echo "❌ Could not read the archive"; exit 1; }
+        if grep -qE '(^/|(^|/)\.\.(/|$))' <<< "$names"; then
+            echo "❌ The archive has absolute or parent-directory member names; refusing to extract"
+            exit 1
+        fi
+        if tar -tvf "$work/ollama.tar" | grep -E -q '^[cbp]|( -> | link to )(/|(.*/)?\.\.(/|$))'; then
+            echo "❌ The archive has device nodes or links leaving the install root; refusing to extract"
+            exit 1
+        fi
+        ${priv[@]+"${priv[@]}"} rm -rf -- "$root/lib/ollama" || exit 1
+        ${priv[@]+"${priv[@]}"} install -d -m 0755 "$root/bin" "$root/lib/ollama" || exit 1
+        ${priv[@]+"${priv[@]}"} tar -xf "$work/ollama.tar" -C "$root" --no-same-owner || { echo "❌ Extraction failed"; exit 1; }
+    )
+}
+
+# franken_ollama_unverified_install [VERSION] - the old behavior, only for an
+# explicit FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true: runs the upstream install script
+# WITHOUT any integrity check. The script is downloaded to a private file first
+# (never piped into a shell); that is not authentication.
+franken_ollama_unverified_install() {
+    local version="${1:-}" work rc
+    if [ -n "$version" ] && ! franken_valid_ollama_version "$version"; then
+        return 1
+    fi
+    echo "⚠️  ⚠️  ⚠️  UNVERIFIED OLLAMA INSTALL (FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true)"
+    echo "⚠️  The upstream install script is downloaded and run as is: nothing checks it."
+    echo "⚠️  Set FRANKEN_OLLAMA_VERSION plus a checksum for a verified install."
+    work="$(mktemp -d)" || return 1
+    franken_ollama_download "https://ollama.com/install.sh" "$work/ollama-install.sh" || { rm -rf -- "$work"; return 1; }
+    if [ -n "$version" ]; then
+        OLLAMA_VERSION="$version" sh "$work/ollama-install.sh"
+    else
+        sh "$work/ollama-install.sh"
+    fi
+    rc=$?
+    rm -rf -- "$work"
+    return $rc
 }
 
 # franken_ollama_parse_version TEXT - first X.Y.Z[-rcN] in `ollama --version`

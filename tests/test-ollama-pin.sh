@@ -38,15 +38,6 @@ for v in "0.33.2" "0.0.0" "10.20.30" "0.33.2-rc1" "1.2.3-rc12"; do
     check "version accepts [$v]" "ok" "$(verdict franken_valid_ollama_version "$v")"
 done
 
-# --- fetch command line: built, never run ------------------------------------
-check "fetch cmd unpinned" "curl -fsSL https://ollama.com/install.sh | sh" "$(franken_ollama_fetch_cmd '')"
-check "fetch cmd pinned" "curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.33.2 sh" \
-    "$(franken_ollama_fetch_cmd 0.33.2)"
-check "fetch cmd pinned rc" "curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.34.0-rc1 sh" \
-    "$(franken_ollama_fetch_cmd 0.34.0-rc1)"
-check "fetch cmd refuses hostile pin" "rejected" \
-    "$(franken_ollama_fetch_cmd '0.33.2; id' > /dev/null && echo ok || echo rejected)"
-
 # --- installed version parsed from `ollama --version` output -----------------
 check "parse plain" "0.33.2" "$(franken_ollama_parse_version 'ollama version is 0.33.2')"
 check "parse with warning line" "0.33.2" "$(franken_ollama_parse_version 'Warning: could not connect to a running Ollama instance

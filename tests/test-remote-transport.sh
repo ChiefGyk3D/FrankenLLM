@@ -157,7 +157,7 @@ done
 run_install FRANKEN_GPU0_PORT=11500 FRANKEN_GPU1_PORT=11501 FRANKEN_BIND_ADDR=192.0.2.10
 check "install runs the server script" "yes" "$(grep -q 'Remote Installation Starting' <<< "$OUT" && echo yes || echo no)"
 RUNLINE="$(grep "^ssh \[-t\]" <<< "$LOGTXT")"
-check "run command: ssh -t -- host, then ONE quoted word" "yes" "$([[ "$RUNLINE" =~ ^ssh\ \[-t\]\ \[--\]\ \[test-host\]\ \[\'bash\'\ \'-c\'\ \'.*\'\ \'_\'\ \'$WORK/remotetmp/tmp\.[A-Za-z0-9]+\'\ \'11500\'\ \'11501\'\ \'192\.0\.2\.10\'\ \'\'\ \'\'\ \'\'\ \'\'\ \'\'\]$ ]] && echo yes || echo no)"
+check "run command: ssh -t -- host, then ONE quoted word" "yes" "$([[ "$RUNLINE" =~ ^ssh\ \[-t\]\ \[--\]\ \[test-host\]\ \[\'bash\'\ \'-c\'\ \'.*\'\ \'_\'\ \'$WORK/remotetmp/tmp\.[A-Za-z0-9]+\'\ \'11500\'\ \'11501\'\ \'192\.0\.2\.10\'\ \'\'\ \'\'\ \'\'\ \'\'\ \'\'\ \'\'\ \'\'\ \'\'\]$ ]] && echo yes || echo no)"
 check "never the fixed /tmp path" "0" "$(grep -c '/tmp/frankenllm-remote-install' <<< "$LOGTXT" || true)"
 check "remote dir is private (0700) at copy time" "dirmode 700" "$(grep '^dirmode' <<< "$LOGTXT")"
 check "remote dir removed afterwards" "" "$(ls -A "$WORK/remotetmp")"

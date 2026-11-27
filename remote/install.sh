@@ -59,9 +59,46 @@ if [ -n "$FRANKEN_REQUIRE_GPU" ] && ! franken_valid_require_gpu "$FRANKEN_REQUIR
     echo "❌ FRANKEN_REQUIRE_GPU must be true or false"
     exit 1
 fi
-if [ -z "$FRANKEN_OLLAMA_VERSION" ]; then
-    echo "⚠️  Ollama install is unpinned: the latest upstream version will be used."
-    echo "   Set FRANKEN_OLLAMA_VERSION (e.g. 0.33.2) to pin it."
+
+# Ollama download verification. A pinned version is downloaded from its GitHub
+# release and checked against a sha256: FRANKEN_OLLAMA_SHA256 when set, else the
+# entry in remote/ollama-checksums.txt. Without both, the server refuses to
+# install Ollama (an existing matching install is kept) unless
+# FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true.
+FRANKEN_OLLAMA_SHA256="${FRANKEN_OLLAMA_SHA256:-}"
+FRANKEN_ALLOW_UNVERIFIED_OLLAMA="${FRANKEN_ALLOW_UNVERIFIED_OLLAMA:-}"
+OLLAMA_SHA256=""
+OLLAMA_SHA256_ASSET=""
+if [ -n "$FRANKEN_OLLAMA_SHA256" ] && ! franken_valid_sha256 "$FRANKEN_OLLAMA_SHA256"; then
+    echo "❌ FRANKEN_OLLAMA_SHA256 must be 64 lowercase hex characters"
+    exit 1
+fi
+if [ -n "$FRANKEN_OLLAMA_SHA256" ] && [ -z "$FRANKEN_OLLAMA_VERSION" ]; then
+    echo "❌ FRANKEN_OLLAMA_SHA256 needs FRANKEN_OLLAMA_VERSION (the checksum is for that version)"
+    exit 1
+fi
+if [ -n "$FRANKEN_ALLOW_UNVERIFIED_OLLAMA" ] && ! franken_valid_require_gpu "$FRANKEN_ALLOW_UNVERIFIED_OLLAMA"; then
+    echo "❌ FRANKEN_ALLOW_UNVERIFIED_OLLAMA must be true or false"
+    exit 1
+fi
+if [ -n "$FRANKEN_OLLAMA_VERSION" ]; then
+    if [ -n "$FRANKEN_OLLAMA_SHA256" ]; then
+        OLLAMA_SHA256="$FRANKEN_OLLAMA_SHA256"
+    elif OLLAMA_SHA256="$(franken_ollama_checksum_lookup "$FRANKEN_OLLAMA_VERSION" ollama-linux-amd64.tar.zst "$SCRIPT_DIR/ollama-checksums.txt")"; then
+        OLLAMA_SHA256_ASSET="ollama-linux-amd64.tar.zst"
+    else
+        OLLAMA_SHA256=""
+    fi
+fi
+if [ -n "$OLLAMA_SHA256" ]; then
+    echo "✅ Ollama $FRANKEN_OLLAMA_VERSION will be downloaded from its GitHub release and verified (sha256 $OLLAMA_SHA256)"
+elif [ "$FRANKEN_ALLOW_UNVERIFIED_OLLAMA" = "true" ]; then
+    echo "⚠️  FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true: if Ollama has to be installed, the upstream"
+    echo "   install script is run WITHOUT any integrity check."
+else
+    echo "ℹ️  No checksum for Ollama ${FRANKEN_OLLAMA_VERSION:-(no version pinned)}: if Ollama is already installed"
+    echo "   (and matches the pin) it is kept; otherwise the install stops. Set FRANKEN_OLLAMA_VERSION to a"
+    echo "   version in remote/ollama-checksums.txt, or add FRANKEN_OLLAMA_SHA256."
 fi
 
 echo "╔════════════════════════════════════════════════════════════╗"
@@ -146,7 +183,8 @@ echo ""
 RUN_SCRIPT='d=$1; shift; trap "rm -rf -- \"\$d\"" EXIT; bash "$d/install.sh" "$@"'
 ssh -t -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote bash -c "$RUN_SCRIPT" _ "$REMOTE_DIR" \
     "$FRANKEN_GPU0_PORT" "$FRANKEN_GPU1_PORT" "$FRANKEN_BIND_ADDR" "$FRANKEN_SERVICE_USER" \
-    "$FRANKEN_MEMORY_MAX" "$FRANKEN_TASKS_MAX" "$FRANKEN_OLLAMA_VERSION" "$FRANKEN_REQUIRE_GPU")"
+    "$FRANKEN_MEMORY_MAX" "$FRANKEN_TASKS_MAX" "$FRANKEN_OLLAMA_VERSION" "$FRANKEN_REQUIRE_GPU" \
+    "$OLLAMA_SHA256" "$OLLAMA_SHA256_ASSET" "$FRANKEN_ALLOW_UNVERIFIED_OLLAMA")"
 REMOTE_DIR=""
 
 echo ""

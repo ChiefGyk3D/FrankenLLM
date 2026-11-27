@@ -154,11 +154,14 @@ export FRANKEN_GPU1_WARMUP_TIMEOUT="${FRANKEN_GPU1_WARMUP_TIMEOUT:-120}"
 # FRANKEN_MEMORY_MAX  systemd MemoryMax for each unit (e.g. 24G, 512M, infinity).
 # FRANKEN_TASKS_MAX   systemd TasksMax for each unit (e.g. 512, infinity).
 # Unset or empty MemoryMax/TasksMax writes no line. See docs/CONFIGURATION.md.
-# FRANKEN_OLLAMA_VERSION  Pin the Ollama version the remote install fetches, as
-#                     X.Y.Z or X.Y.Z-rcN (e.g. 0.33.2); passed to the upstream
-#                     installer as OLLAMA_VERSION and checked after install.
-#                     Unset = latest, with a warning. The upstream script has no
-#                     checksum step: a pin is reproducible, not integrity-checked.
+# FRANKEN_OLLAMA_VERSION  Pin the Ollama version the remote install uses, as
+#                     X.Y.Z or X.Y.Z-rcN (e.g. 0.33.2). The release asset is
+#                     downloaded from GitHub and its sha256 is checked before it
+#                     is extracted: the checksum comes from
+#                     remote/ollama-checksums.txt or FRANKEN_OLLAMA_SHA256.
+#                     Without a pin and a checksum the install stops, unless
+#                     FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true (not recommended).
+# FRANKEN_OLLAMA_SHA256  64 lowercase hex characters; needs FRANKEN_OLLAMA_VERSION.
 # FRANKEN_REQUIRE_GPU  true or false (unset/empty = false). When true, each unit
 #                     gets ExecStartPre=<nvidia-smi> -L, so a missing driver
 #                     (e.g. after a kernel update) makes the unit FAIL instead of
@@ -170,6 +173,8 @@ export FRANKEN_SERVICE_USER="${FRANKEN_SERVICE_USER:-}"
 export FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
 export FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
 export FRANKEN_OLLAMA_VERSION="${FRANKEN_OLLAMA_VERSION:-}"
+export FRANKEN_OLLAMA_SHA256="${FRANKEN_OLLAMA_SHA256:-}"
+export FRANKEN_ALLOW_UNVERIFIED_OLLAMA="${FRANKEN_ALLOW_UNVERIFIED_OLLAMA:-}"
 export FRANKEN_REQUIRE_GPU="${FRANKEN_REQUIRE_GPU:-}"
 
 # Detect if we're installing locally or remotely

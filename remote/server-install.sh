@@ -4,7 +4,8 @@
 # remote/unit-lib.sh (the helper functions used below) and this file into one
 # script, copies it into a private directory on the target and runs it there.
 # Arguments: GPU0_PORT GPU1_PORT BIND_ADDR SERVICE_USER MEMORY_MAX TASKS_MAX
-#            OLLAMA_PIN REQUIRE_GPU
+#            OLLAMA_PIN REQUIRE_GPU OLLAMA_SHA256 OLLAMA_SHA256_ASSET
+#            ALLOW_UNVERIFIED_OLLAMA
 set -e
 
 GPU0_PORT="${1:-11434}"
@@ -15,6 +16,9 @@ MEMORY_MAX="${5:-}"
 TASKS_MAX="${6:-}"
 OLLAMA_PIN="${7:-}"
 REQUIRE_GPU="${8:-}"
+OLLAMA_SHA256="${9:-}"
+OLLAMA_SHA256_ASSET="${10:-}"
+ALLOW_UNVERIFIED_OLLAMA="${11:-}"
 
 for v in "$BIND_ADDR:franken_valid_bind_addr" "$SERVICE_USER:franken_valid_service_user" \
          "$MEMORY_MAX:franken_valid_memory_max" "$TASKS_MAX:franken_valid_tasks_max" \
@@ -24,6 +28,18 @@ for v in "$BIND_ADDR:franken_valid_bind_addr" "$SERVICE_USER:franken_valid_servi
         exit 1
     fi
 done
+if [ -n "$OLLAMA_SHA256" ] && { ! franken_valid_sha256 "$OLLAMA_SHA256" || [ -z "$OLLAMA_PIN" ]; }; then
+    echo "❌ The Ollama checksum must be a lowercase sha256 and needs a pinned version"
+    exit 1
+fi
+if [ -n "$OLLAMA_SHA256_ASSET" ] && ! [[ "$OLLAMA_SHA256_ASSET" =~ ^ollama-linux-[a-z0-9]+\.tar\.zst$ ]]; then
+    echo "❌ Invalid Ollama asset name"
+    exit 1
+fi
+if [ -n "$ALLOW_UNVERIFIED_OLLAMA" ] && ! franken_valid_require_gpu "$ALLOW_UNVERIFIED_OLLAMA"; then
+    echo "❌ FRANKEN_ALLOW_UNVERIFIED_OLLAMA must be true or false"
+    exit 1
+fi
 for p in "$GPU0_PORT" "$GPU1_PORT"; do
     if ! franken_valid_port "$p"; then
         echo "❌ GPU ports must be decimal numbers from 1 to 65535"
@@ -84,11 +100,32 @@ fi
 if [ -n "$INSTALLED_VERSION" ] && { [ -z "$OLLAMA_PIN" ] || [ "$INSTALLED_VERSION" = "$OLLAMA_PIN" ]; }; then
     echo "✅ Ollama already installed"
 else
-    if [ -z "$OLLAMA_PIN" ]; then
-        echo "⚠️  Ollama install is unpinned (set FRANKEN_OLLAMA_VERSION to pin it)"
+    # Default path: a pinned version plus a known sha256. Network bytes are never
+    # piped into a shell. Anything less fails closed unless the operator said,
+    # explicitly, that an unverified install is acceptable.
+    OLLAMA_ASSET="$(franken_ollama_asset)" || OLLAMA_ASSET=""
+    if [ -n "$OLLAMA_PIN" ] && [ -n "$OLLAMA_SHA256" ]; then
+        if [ -z "$OLLAMA_ASSET" ]; then
+            echo "❌ Unsupported CPU architecture for the Ollama release: $(uname -m)"
+            exit 1
+        fi
+        if [ -n "$OLLAMA_SHA256_ASSET" ] && [ "$OLLAMA_SHA256_ASSET" != "$OLLAMA_ASSET" ]; then
+            echo "❌ The recorded checksum is for $OLLAMA_SHA256_ASSET but this server needs $OLLAMA_ASSET."
+            echo "   Set FRANKEN_OLLAMA_SHA256 to the sha256 of $OLLAMA_ASSET for version $OLLAMA_PIN."
+            exit 1
+        fi
+        echo "Installing Ollama $OLLAMA_PIN from the pinned release asset (sha256 checked before extraction)..."
+        franken_ollama_install_verified "$OLLAMA_PIN" "$OLLAMA_SHA256" "$OLLAMA_ASSET" /usr/local sudo
+    elif [ "$ALLOW_UNVERIFIED_OLLAMA" = "true" ]; then
+        franken_ollama_unverified_install "$OLLAMA_PIN"
+    else
+        echo "❌ Refusing to install Ollama without a pinned version and a checksum."
+        echo "   Set FRANKEN_OLLAMA_VERSION to a version listed in remote/ollama-checksums.txt (e.g. 0.33.2),"
+        echo "   or set FRANKEN_OLLAMA_VERSION together with FRANKEN_OLLAMA_SHA256."
+        echo "   To accept an unverified download of the upstream install script instead, set"
+        echo "   FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true (not recommended)."
+        exit 1
     fi
-    # The command is built from a validated version only (checked above).
-    eval "$(franken_ollama_fetch_cmd "$OLLAMA_PIN")"
     echo "✅ Ollama installed"
 fi
 FINAL_VERSION="$(franken_ollama_parse_version "$(ollama --version 2>&1 || true)")"

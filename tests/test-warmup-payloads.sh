@@ -275,4 +275,12 @@ EXEC_RC=$?
 bash "$REPO/tests/test-remote-transport.sh"
 TRANSPORT_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ] && [ "$EXEC_RC" -eq 0 ] && [ "$TRANSPORT_RC" -eq 0 ]
+# --- 19. Verified Ollama download (checksum, archive checks) ------------------
+bash "$REPO/tests/test-ollama-verify.sh"
+VERIFY_RC=$?
+
+# --- 20. Server-side install flow (Ollama policy, account policy, rollback) ---
+bash "$REPO/tests/test-install-flow.sh"
+FLOW_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ] && [ "$EXEC_RC" -eq 0 ] && [ "$TRANSPORT_RC" -eq 0 ] && [ "$VERIFY_RC" -eq 0 ] && [ "$FLOW_RC" -eq 0 ]

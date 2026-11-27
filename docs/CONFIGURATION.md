@@ -156,8 +156,13 @@ FRANKEN_SERVICE_USER=frankenllm
 FRANKEN_MEMORY_MAX=24G
 FRANKEN_TASKS_MAX=512
 
-# Pin the Ollama version the install fetches: X.Y.Z or X.Y.Z-rcN
+# Pin the Ollama version (X.Y.Z or X.Y.Z-rcN). 0.33.2 has a checksum in
+# remote/ollama-checksums.txt; for another version also set the sha256 of the
+# release asset (lowercase hex, from the GitHub release digest)
 FRANKEN_OLLAMA_VERSION=0.33.2
+# FRANKEN_OLLAMA_SHA256=
+# Not recommended: allow an unverified download of the upstream install script
+# FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true
 
 # Fail-closed GPU guard: true or false (unset or empty = false)
 FRANKEN_REQUIRE_GPU=true
@@ -187,15 +192,33 @@ script finds `nvidia-smi` with `command -v`, requires the path to match
 `^/[A-Za-z0-9/_.-]+$`, and fails the install with a clear message otherwise. Unset
 or `false` leaves the unit text unchanged.
 
-`FRANKEN_OLLAMA_VERSION` is passed to the upstream installer as `OLLAMA_VERSION`
-(`curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.33.2 sh`). Unset keeps
-the current behavior (latest upstream) and prints a warning that the install is
-unpinned. The value is validated on the workstation and again on the server
-(`^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$`). After install the version reported by the
-`ollama` binary is printed, and a pinned install fails if it differs. An existing
-install at a different version is re-installed at the pin. The upstream script has
-no checksum step, so a pin gives a reproducible version, not integrity. The helpers
-are tested by `tests/test-ollama-pin.sh`.
+`FRANKEN_OLLAMA_VERSION` pins the Ollama version (`^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$`,
+checked on the workstation and again on the server). The install is verified, not
+piped into a shell:
+
+1. The pin must have a known sha256: an entry in `remote/ollama-checksums.txt`
+   (`<version> <asset> <sha256>`, shipped for 0.33.2 and `ollama-linux-amd64.tar.zst`),
+   or `FRANKEN_OLLAMA_SHA256=<64 lowercase hex>` for another version or architecture.
+   Take the value from the GitHub release page digest for the asset.
+2. The server downloads exactly that release asset from
+   `https://github.com/ollama/ollama/releases/download/v<version>/` with
+   `curl --proto =https --proto-redir =https`, checks the sha256 BEFORE decompressing
+   or extracting, rejects archives with absolute or `..` member names, device nodes or
+   links that leave the install root, and then extracts under `/usr/local`
+   (`bin/ollama`, `lib/ollama`: the same files the upstream installer places). No
+   account or service is created by this step. `zstd` must be installed on the
+   server; the install stops with a clear message when it is not.
+3. Without a pinned version and a checksum the install stops (fail closed). An
+   existing Ollama that already satisfies the request is kept and needs neither.
+   After install the version reported by the `ollama` binary is printed, and a
+   pinned install fails if it differs.
+
+`FRANKEN_ALLOW_UNVERIFIED_OLLAMA=true` is the explicit, not recommended opt-out: the
+upstream `install.sh` is downloaded over https to a private file and run as is,
+with a loud warning and no integrity check (it is never piped into a shell).
+Anything other than `true` or `false` is rejected. The helpers are tested by
+`tests/test-ollama-pin.sh`, `tests/test-ollama-verify.sh` (fake artifact, wrong
+hash, hostile archives, missing zstd) and `tests/test-install-flow.sh`.
 
 ## Example Configurations
 
