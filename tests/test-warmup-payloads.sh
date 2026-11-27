@@ -259,4 +259,8 @@ UNIT_RC=$?
 bash "$REPO/tests/test-ollama-pin.sh"
 PIN_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ]
+# --- 15. Model-script bind address test ---------------------------------------
+bash "$REPO/tests/test-model-host.sh"
+HOST_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ]

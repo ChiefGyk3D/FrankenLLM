@@ -6,6 +6,8 @@
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
+source "$SCRIPT_DIR/../remote/unit-lib.sh"
+MODEL_HOST="$(franken_model_host localhost "$FRANKEN_BIND_ADDR")"
 
 # Check if we have the right number of arguments
 EXPECTED_ARGS=$FRANKEN_GPU_COUNT
@@ -85,7 +87,7 @@ for i in $(seq 0 $(($FRANKEN_GPU_COUNT - 1))); do
     
     echo "GPU $i ($gpu_name) - Port $gpu_port:"
     echo "  Pulling $model..."
-    franken_exec "OLLAMA_HOST=http://localhost:$gpu_port ollama pull $model"
+    franken_exec "OLLAMA_HOST=http://$MODEL_HOST:$gpu_port ollama pull $model"
     echo ""
 done
 

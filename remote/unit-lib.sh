@@ -45,6 +45,22 @@ franken_ready_url() {
     printf 'http://%s:%s/api/tags' "$host" "$2"
 }
 
+# franken_model_host DEFAULT_HOST BIND - host the model scripts (bin/pull-model.sh
+# and friends) use to reach Ollama. A valid specific BIND address is used; empty
+# or 0.0.0.0 -> DEFAULT_HOST; invalid -> DEFAULT_HOST plus a one-line warning on
+# stderr (the invalid value is never returned or echoed to a command).
+franken_model_host() {
+    local default_host="$1" bind="${2:-}"
+    if [ -z "$bind" ] || [ "$bind" = "0.0.0.0" ]; then
+        printf '%s' "$default_host"
+    elif franken_valid_bind_addr "$bind"; then
+        printf '%s' "$bind"
+    else
+        echo "WARNING: FRANKEN_BIND_ADDR is not a valid IPv4 address; using $default_host" >&2
+        printf '%s' "$default_host"
+    fi
+}
+
 # franken_valid_memory_max VALUE - positive integer with optional K/M/G/T, or infinity.
 franken_valid_memory_max() {
     [[ "$1" =~ ^[1-9][0-9]*[KMGT]?$ || "$1" == "infinity" ]]

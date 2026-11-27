@@ -6,6 +6,8 @@
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
+source "$SCRIPT_DIR/../remote/unit-lib.sh"
+MODEL_HOST="$(franken_model_host localhost "$FRANKEN_BIND_ADDR")"
 
 MODEL_NAME="${1}"
 
@@ -24,12 +26,12 @@ echo "GPU Count: $FRANKEN_GPU_COUNT"
 echo ""
 
 echo "GPU 0 ($FRANKEN_GPU0_NAME) - Port $FRANKEN_GPU0_PORT:"
-franken_exec "OLLAMA_HOST=http://localhost:$FRANKEN_GPU0_PORT ollama pull $MODEL_NAME"
+franken_exec "OLLAMA_HOST=http://$MODEL_HOST:$FRANKEN_GPU0_PORT ollama pull $MODEL_NAME"
 
 if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
     echo ""
     echo "GPU 1 ($FRANKEN_GPU1_NAME) - Port $FRANKEN_GPU1_PORT:"
-    franken_exec "OLLAMA_HOST=http://localhost:$FRANKEN_GPU1_PORT ollama pull $MODEL_NAME"
+    franken_exec "OLLAMA_HOST=http://$MODEL_HOST:$FRANKEN_GPU1_PORT ollama pull $MODEL_NAME"
 fi
 
 echo ""
