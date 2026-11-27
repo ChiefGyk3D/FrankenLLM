@@ -431,7 +431,14 @@ FRANKEN_SERVER_IP=localhost
 
 ## Environment Variables
 
-All configuration is loaded from `.env` through `config.sh`:
+All configuration is loaded from `.env` through `config.sh`. The file is read as
+data, never executed: only `KEY=VALUE` lines for `FRANKEN_*` keys are accepted. A
+value is either bare (letters, digits and `_ @ % + = : , . / -`), `"double quoted"`
+or `'single quoted'`; quoted values are literal (no backslash, `$` or backtick).
+Duplicate keys, control characters (tabs and carriage returns too) and any other
+syntax stop the script with an error and nothing is loaded. Keys that are not
+`FRANKEN_*` are ignored with a warning. A variable already set in the environment
+wins over the file.
 
 ```bash
 # Core

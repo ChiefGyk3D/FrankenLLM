@@ -5,12 +5,70 @@
 # Get the script directory
 CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load .env file if it exists
-if [ -f "$CONFIG_DIR/.env" ]; then
-    set -a
-    source "$CONFIG_DIR/.env"
-    set +a
-fi
+# franken_load_env FILE - read FILE as DATA (never sourced, never eval'd).
+# Accepted lines: blank, "# comment", and [export ]FRANKEN_NAME=VALUE where VALUE
+# is unquoted (letters, digits and _ @ % + = : , . / -), "double quoted" or
+# 'single quoted'. Quoted values are literal: no backslash, $, backtick or
+# nested quote of the same kind. Duplicate keys, control characters (tab and CR
+# included) and any other syntax are errors and nothing is loaded (fail closed).
+# Keys that are not FRANKEN_* are ignored with a warning. A variable already set
+# in the environment (even empty) wins over the file.
+franken_load_env() {
+    local file="$1" line key val lineno=0 seen=" " n i
+    local -a keys=() vals=()
+    local re_key='^(export[[:space:]]+)?(FRANKEN_[A-Z0-9_]+)=(.*)$'
+    local re_other='^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*='
+    local re_dq='^"([^"\\$`]*)"[[:space:]]*$'
+    local re_sq="^'([^']*)'[[:space:]]*\$"
+    local re_bare='^[A-Za-z0-9_@%+=:,./-]*$'
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        lineno=$((lineno + 1))
+        if [[ "$line" =~ [[:cntrl:]] ]]; then
+            echo "ERROR: $file line $lineno: control characters are not allowed" >&2
+            return 1
+        fi
+        [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+        if [[ "$line" =~ $re_key ]]; then
+            key="${BASH_REMATCH[2]}"
+            val="${BASH_REMATCH[3]}"
+        elif [[ "$line" =~ $re_other ]]; then
+            echo "WARNING: $file line $lineno: ignoring a setting that is not FRANKEN_*" >&2
+            continue
+        else
+            echo "ERROR: $file line $lineno: not a KEY=VALUE line" >&2
+            return 1
+        fi
+        if [[ "$seen" == *" $key "* ]]; then
+            echo "ERROR: $file line $lineno: duplicate key $key" >&2
+            return 1
+        fi
+        seen="$seen$key "
+        if [[ "$val" =~ $re_dq ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ $re_sq ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ ! "$val" =~ $re_bare ]]; then
+            echo "ERROR: $file line $lineno: unsupported value syntax for $key (use plain quotes; no backslash, dollar or backtick)" >&2
+            return 1
+        fi
+        keys+=("$key")
+        vals+=("$val")
+    done < "$file"
+    n=${#keys[@]}
+    for ((i = 0; i < n; i++)); do
+        key="${keys[$i]}"
+        if [ -z "${!key+x}" ]; then
+            printf -v "$key" '%s' "${vals[$i]}"
+            export "${key?}"
+        fi
+    done
+    return 0
+}
+
+# Load .env if it exists (as data, see franken_load_env). A bad file stops the
+# calling script: running with a half-read configuration is worse than failing.
+franken_load_env "$CONFIG_DIR/.env" || exit 1
 
 # Server IP address - set to "localhost" or "127.0.0.1" for local installation
 # Set to remote IP (e.g., "192.168.201.145") for remote installation

@@ -263,4 +263,8 @@ PIN_RC=$?
 bash "$REPO/tests/test-model-host.sh"
 HOST_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ]
+# --- 16. .env is read as data -------------------------------------------------
+bash "$REPO/tests/test-env-parse.sh"
+ENV_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ]
