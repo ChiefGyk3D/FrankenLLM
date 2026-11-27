@@ -181,12 +181,31 @@ else
     export FRANKEN_SSH_PREFIX="ssh $FRANKEN_SERVER_IP"
 fi
 
-# Helper function to run commands locally or remotely
+# franken_sh_quote ARG... - one line of POSIX single-quoted words that any
+# sh-compatible login shell reads back as exactly ARG... (embedded quotes,
+# spaces, newlines and metacharacters included).
+franken_sh_quote() {
+    local out="" a
+    for a in "$@"; do
+        a="${a//\'/\'\\\'\'}"
+        out+="${out:+ }'$a'"
+    done
+    printf '%s' "$out"
+}
+
+# Helper function to run a command locally or remotely. It takes an ARGUMENT
+# ARRAY, never a command string: franken_exec ollama pull "$model". Remotely the
+# words are quoted with franken_sh_quote, so data cannot become shell syntax.
+# For a fixed script use: franken_exec bash -c 'script using "$1"' _ ARG
 franken_exec() {
+    if [ "$#" -eq 0 ]; then
+        echo "franken_exec: no command given" >&2
+        return 2
+    fi
     if [ "$FRANKEN_IS_LOCAL" = true ]; then
-        bash -c "$1"
+        "$@"
     else
-        ssh "$FRANKEN_SERVER_IP" "$1"
+        ssh -- "$FRANKEN_SERVER_IP" "$(franken_sh_quote "$@")"
     fi
 }
 
@@ -203,6 +222,7 @@ franken_copy() {
 }
 
 # Export the helper functions
+export -f franken_sh_quote
 export -f franken_exec
 export -f franken_copy
 

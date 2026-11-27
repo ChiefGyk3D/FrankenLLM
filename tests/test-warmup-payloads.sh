@@ -267,4 +267,8 @@ HOST_RC=$?
 bash "$REPO/tests/test-env-parse.sh"
 ENV_RC=$?
 
-[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ]
+# --- 17. Arguments, not shell strings (model names, ports) --------------------
+bash "$REPO/tests/test-exec-args.sh"
+EXEC_RC=$?
+
+[ "$FAIL" -eq 0 ] && [ "$UNIT_RC" -eq 0 ] && [ "$PIN_RC" -eq 0 ] && [ "$HOST_RC" -eq 0 ] && [ "$ENV_RC" -eq 0 ] && [ "$EXEC_RC" -eq 0 ]

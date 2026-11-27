@@ -440,6 +440,12 @@ syntax stop the script with an error and nothing is loaded. Keys that are not
 `FRANKEN_*` are ignored with a warning. A variable already set in the environment
 wins over the file.
 
+Model names and ports are validated before any command runs. A model name may
+contain letters, digits, `.`, `-`, `_`, `:` and `/` and must start with a letter or
+digit; a port must be a decimal number from 1 to 65535. Commands that run on the
+server are sent as separate quoted arguments (`franken_exec ollama pull "$model"`),
+never as a command string. `tests/test-exec-args.sh` covers this.
+
 ```bash
 # Core
 FRANKEN_SERVER_IP      # Server location

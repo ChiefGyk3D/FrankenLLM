@@ -83,31 +83,31 @@ else
     echo "Mode: REMOTE (${FRANKEN_SERVER_IP})"
     echo ""
     
+    # Fixed script; the unit name is a positional argument, never spliced in.
+    KEEPALIVE_SCRIPT='unit="/etc/systemd/system/$1.service"
+if sudo grep -q "OLLAMA_KEEP_ALIVE" "$unit" 2>/dev/null; then
+    echo "✅ $1 already has OLLAMA_KEEP_ALIVE configured"
+else
+    sudo sed -i "/Environment=\"OLLAMA_HOST/a Environment=\"OLLAMA_KEEP_ALIVE=-1\"" "$unit" && echo "✅ Added OLLAMA_KEEP_ALIVE=-1 to $1"
+fi'
+
     echo "Updating ollama-gpu0..."
-    franken_exec "if sudo grep -q 'OLLAMA_KEEP_ALIVE' /etc/systemd/system/ollama-gpu0.service 2>/dev/null; then
-        echo '✅ ollama-gpu0 already has OLLAMA_KEEP_ALIVE configured'
-    else
-        sudo sed -i '/Environment=\"OLLAMA_HOST/a Environment=\"OLLAMA_KEEP_ALIVE=-1\"' /etc/systemd/system/ollama-gpu0.service && echo '✅ Added OLLAMA_KEEP_ALIVE=-1 to ollama-gpu0'
-    fi"
-    
+    franken_exec bash -c "$KEEPALIVE_SCRIPT" _ ollama-gpu0
+
     if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
         echo ""
         echo "Updating ollama-gpu1..."
-        franken_exec "if sudo grep -q 'OLLAMA_KEEP_ALIVE' /etc/systemd/system/ollama-gpu1.service 2>/dev/null; then
-            echo '✅ ollama-gpu1 already has OLLAMA_KEEP_ALIVE configured'
-        else
-            sudo sed -i '/Environment=\"OLLAMA_HOST/a Environment=\"OLLAMA_KEEP_ALIVE=-1\"' /etc/systemd/system/ollama-gpu1.service && echo '✅ Added OLLAMA_KEEP_ALIVE=-1 to ollama-gpu1'
-        fi"
+        franken_exec bash -c "$KEEPALIVE_SCRIPT" _ ollama-gpu1
     fi
-    
+
     echo ""
     echo "Reloading systemd daemon..."
-    franken_exec "sudo systemctl daemon-reload"
-    
+    franken_exec sudo systemctl daemon-reload
+
     echo "Restarting services..."
-    franken_exec "sudo systemctl restart ollama-gpu0"
+    franken_exec sudo systemctl restart ollama-gpu0
     if [ "$FRANKEN_GPU_COUNT" -ge 2 ]; then
-        franken_exec "sudo systemctl restart ollama-gpu1"
+        franken_exec sudo systemctl restart ollama-gpu1
     fi
     
     echo ""

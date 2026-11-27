@@ -16,6 +16,34 @@ franken_valid_bind_addr() {
     done
 }
 
+# franken_valid_port VALUE - decimal integer 1..65535, no sign, no leading zero.
+franken_valid_port() {
+    [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]
+}
+
+# franken_valid_model_name NAME - conservative Ollama model reference: letters,
+# digits, dot, dash, underscore, colon and slash; must start with a letter or
+# digit (so it can never look like an option); at most 255 characters.
+franken_valid_model_name() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$ ]]
+}
+
+# franken_valid_install_dir PATH - absolute, normalized, conservative characters:
+# no "." or ".." components, no empty components, not "/", at most 200 characters.
+franken_valid_install_dir() {
+    local p="$1" part
+    local -a parts
+    [ "${#p}" -le 200 ] || return 1
+    [[ "$p" =~ ^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || return 1
+    IFS=/ read -r -a parts <<< "${p#/}"
+    for part in "${parts[@]}"; do
+        if [ "$part" = "." ] || [ "$part" = ".." ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
 # franken_valid_service_user NAME - lowercase account name, max 32 characters.
 # "root" is refused: it would bypass the installer's non-root guard.
 franken_valid_service_user() {
