@@ -97,11 +97,30 @@ franken_ollama_parse_version() {
     grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' <<< "$1" | head -n 1
 }
 
-# franken_render_unit GPU PORT MODELS_DIR USER BIND MEMORY_MAX TASKS_MAX
+# franken_valid_require_gpu VALUE - exactly true or false (callers treat empty as false).
+franken_valid_require_gpu() {
+    [ "$1" = "true" ] || [ "$1" = "false" ]
+}
+
+# franken_valid_nvidia_smi_path PATH - absolute path, safe characters only
+# (no whitespace, quotes, %, $ or shell/systemd specials).
+franken_valid_nvidia_smi_path() {
+    [[ "$1" =~ ^/[A-Za-z0-9/_.-]+$ ]]
+}
+
+# franken_render_unit GPU PORT MODELS_DIR USER BIND MEMORY_MAX TASKS_MAX [REQUIRE_GPU NVIDIA_SMI]
 # Prints the unit text. Empty BIND means all interfaces (0.0.0.0); empty
-# MEMORY_MAX / TASKS_MAX write no limit line. Callers validate first.
+# MEMORY_MAX / TASKS_MAX write no limit line. REQUIRE_GPU=true adds
+# ExecStartPre=<NVIDIA_SMI> -L before ExecStart, so the unit fails (and
+# restarts, Restart=always) when no GPU is visible instead of running on the
+# CPU; true with an invalid NVIDIA_SMI path prints nothing and returns 1.
+# Any other REQUIRE_GPU value renders the default unit. Callers validate first.
 franken_render_unit() {
     local gpu="$1" port="$2" models="$3" user="$4" bind="${5:-0.0.0.0}" mem="$6" tasks="$7"
+    local require_gpu="${8:-}" smi="${9:-}"
+    if [ "$require_gpu" = "true" ] && ! franken_valid_nvidia_smi_path "$smi"; then
+        return 1
+    fi
     cat << UNIT
 [Unit]
 Description=Ollama Service for GPU $gpu
@@ -114,6 +133,9 @@ Environment="CUDA_VISIBLE_DEVICES=$gpu"
 Environment="OLLAMA_HOST=$bind:$port"
 Environment="OLLAMA_MODELS=$models"
 Environment="OLLAMA_KEEP_ALIVE=-1"
+UNIT
+    [ "$require_gpu" = "true" ] && printf 'ExecStartPre=%s -L\n' "$smi"
+    cat << UNIT
 ExecStart=/usr/local/bin/ollama serve
 Restart=always
 RestartSec=3

@@ -121,7 +121,7 @@ main model. If you change models, re-check with `ollama ps` that both show
 
 ### Remote Install Hardening (opt-in)
 
-`remote/install.sh` reads five optional settings. All are unset by default, which
+`remote/install.sh` reads six optional settings. All are unset by default, which
 keeps the current behavior (bind `0.0.0.0`, units run as the invoking user, no
 resource caps). Each is validated before anything is copied to the server or
 written to a unit; an invalid value stops the install.
@@ -141,6 +141,9 @@ FRANKEN_TASKS_MAX=512
 
 # Pin the Ollama version the install fetches: X.Y.Z or X.Y.Z-rcN
 FRANKEN_OLLAMA_VERSION=0.33.2
+
+# Fail-closed GPU guard: true or false (unset or empty = false)
+FRANKEN_REQUIRE_GPU=true
 ```
 
 Notes: with `FRANKEN_BIND_ADDR` set, the other scripts must reach the server at
@@ -155,6 +158,17 @@ you must grant device access yourself. `remote/setup-warmup.sh` validates
 `FRANKEN_BIND_ADDR` and the boot warmup checks readiness at that address when
 set (localhost otherwise). Unset or empty `MemoryMax`/`TasksMax` writes no line. The text
 rendering is tested by `tests/test-unit-render.sh`.
+
+`FRANKEN_REQUIRE_GPU=true` adds `ExecStartPre=<absolute path of nvidia-smi> -L` before
+`ExecStart` in each unit. If the NVIDIA driver fails to load (for example after a
+kernel update), `nvidia-smi -L` fails and the unit does not start, instead of
+Ollama silently running on the CPU. Because the units use `Restart=always`, a missing
+driver makes the unit fail and restart in a loop; the failing unit is the signal.
+It does not fall back to CPU. Only `true` or `false` is accepted (anything else
+stops the install, on the workstation and again on the server). The server-side
+script finds `nvidia-smi` with `command -v`, requires the path to match
+`^/[A-Za-z0-9/_.-]+$`, and fails the install with a clear message otherwise. Unset
+or `false` leaves the unit text unchanged.
 
 `FRANKEN_OLLAMA_VERSION` is passed to the upstream installer as `OLLAMA_VERSION`
 (`curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.33.2 sh`). Unset keeps

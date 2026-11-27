@@ -93,6 +93,40 @@ for v in "512" "1" "infinity"; do
     check "tasks accepts [$v]" "ok" "$(verdict franken_valid_tasks_max "$v")"
 done
 
+# --- opt-in GPU guard (FRANKEN_REQUIRE_GPU) ---------------------------------
+# Default (false / empty / 8th argument absent) must equal the unit above.
+for v in "" false; do
+    check "require_gpu [$v] unit unchanged" "$EXPECTED_DEFAULT" \
+        "$(franken_render_unit 0 11434 /home/alice/.ollama/models-gpu0 alice '' '' '' "$v" /usr/bin/nvidia-smi)"
+done
+GUARD=$(franken_render_unit 0 11434 /home/alice/.ollama/models-gpu0 alice '' '' '' true /usr/bin/nvidia-smi)
+check "guard: one ExecStartPre line" "ExecStartPre=/usr/bin/nvidia-smi -L" "$(grep '^ExecStartPre=' <<< "$GUARD")"
+check "guard: placed right before ExecStart" "ExecStartPre=/usr/bin/nvidia-smi -L
+ExecStart=/usr/local/bin/ollama serve" "$(grep -B1 '^ExecStart=' <<< "$GUARD")"
+check "guard: only the one line added" "$EXPECTED_DEFAULT" "$(grep -v '^ExecStartPre=' <<< "$GUARD")"
+check "guard: Restart=always kept" "1" "$(grep -c '^Restart=always$' <<< "$GUARD")"
+franken_render_unit 0 11434 /m alice '' '' '' true '' > /dev/null 2>&1
+check "guard on with empty path: render refuses" "1" "$?"
+franken_render_unit 0 11434 /m alice '' '' '' true 'x;id' > /dev/null 2>&1
+check "guard on with bad path: render refuses" "1" "$?"
+check "guard on with bad path: no output" "" \
+    "$(franken_render_unit 0 11434 /m alice '' '' '' true 'x;id' 2> /dev/null)"
+
+for v in "TRUE" "True" "yes" "1" "0" "on" "false " " true" "true
+ExecStartPre=/bin/evil" "true; id" "\$(id)"; do
+    check "require_gpu rejects [$v]" "rejected" "$(verdict franken_valid_require_gpu "$v")"
+done
+for v in "true" "false"; do
+    check "require_gpu accepts [$v]" "ok" "$(verdict franken_valid_require_gpu "$v")"
+done
+for v in "/usr/bin/nvidia-smi" "/opt/nvidia/bin/nvidia-smi" "/usr/lib/x86_64-linux-gnu/nvidia-smi"; do
+    check "nvidia-smi path accepts [$v]" "ok" "$(verdict franken_valid_nvidia_smi_path "$v")"
+done
+for v in "" "nvidia-smi" "bin/nvidia-smi" "/usr/bin/nvidia smi" "/usr/bin/nvidia-smi
+ExecStartPre=/bin/evil" "/usr/bin/x;id" "/usr/bin/\$(id)" "/usr/bin/x\`id\`" "/usr/bin/x%n" "/usr/bin/x\"y" "/usr/bin/x\$HOME"; do
+    check "nvidia-smi path rejects [$v]" "rejected" "$(verdict franken_valid_nvidia_smi_path "$v")"
+done
+
 # --- warmup readiness URL: bind address when set, localhost otherwise ---------
 check "ready url default" "http://localhost:11434/api/tags" "$(franken_ready_url '' 11434)"
 check "ready url bind set" "http://192.0.2.10:11435/api/tags" "$(franken_ready_url 192.0.2.10 11435)"
