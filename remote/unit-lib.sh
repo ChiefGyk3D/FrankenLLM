@@ -236,7 +236,7 @@ franken_ollama_unverified_install() {
 # franken_ollama_parse_version TEXT - first X.Y.Z[-rcN] in `ollama --version`
 # output (which may carry warning lines); empty when none.
 franken_ollama_parse_version() {
-    grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' <<< "$1" | head -n 1
+    grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' <<< "$1" | head -n 1 || true
 }
 
 # franken_valid_require_gpu VALUE - exactly true or false (callers treat empty as false).
@@ -333,4 +333,57 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 UNIT
+}
+
+# franken_check_service_account NAME UID SHELL HOME GROUPS - policy for an
+# EXISTING account that FRANKEN_SERVICE_USER names (the units will run as it and
+# it gets GPU group membership). Returns 0 when it is a dedicated system account:
+# uid 1..999, a nologin shell, a home under /var/lib, and no supplementary groups
+# beyond its own group, video and render. Otherwise prints the reason and returns 1.
+franken_check_service_account() {
+    local LC_ALL=C
+    local name="$1" uid="$2" shell="$3" home="$4" groups="$5" g part
+    local -a parts
+    if ! [[ "$uid" =~ ^[0-9]+$ ]] || [ "$uid" -lt 1 ] || [ "$uid" -gt 999 ]; then
+        echo "Account $name is not a system account (uid '$uid'; need 1-999)"
+        return 1
+    fi
+    case "$shell" in
+        /usr/sbin/nologin|/sbin/nologin|/usr/bin/nologin|/bin/false|/usr/bin/false) ;;
+        *) echo "Account $name has a login shell ('$shell'); need nologin"; return 1 ;;
+    esac
+    if ! [[ "$home" =~ ^/var/lib/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]; then
+        echo "Account $name has home '$home'; need a directory under /var/lib"
+        return 1
+    fi
+    IFS=/ read -r -a parts <<< "${home#/}"
+    for part in "${parts[@]}"; do
+        if [ "$part" = ".." ] || [ "$part" = "." ]; then
+            echo "Account $name has an unnormalized home '$home'"
+            return 1
+        fi
+    done
+    for g in $groups; do
+        case "$g" in
+            "$name"|video|render) ;;
+            *) echo "Account $name is in the group '$g'; only its own group, video and render are allowed"; return 1 ;;
+        esac
+    done
+    return 0
+}
+
+# franken_wait_unit_ready UNIT URL TRIES - 0 once UNIT is active and, when curl
+# exists, URL answers; polls up to TRIES times, two seconds apart.
+franken_wait_unit_ready() {
+    local unit="$1" url="$2" tries="$3" i
+    for ((i = 0; i < tries; i++)); do
+        if systemctl is-active --quiet "$unit"; then
+            if ! command -v curl > /dev/null 2>&1 \
+                || curl --fail --silent --max-time 3 --output /dev/null -- "$url"; then
+                return 0
+            fi
+        fi
+        sleep 2
+    done
+    return 1
 }

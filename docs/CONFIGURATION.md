@@ -171,8 +171,13 @@ FRANKEN_REQUIRE_GPU=true
 Notes: with `FRANKEN_BIND_ADDR` set, the other scripts must reach the server at
 that address. With `FRANKEN_SERVICE_USER` set, models live under the new
 account's home, not the invoking user's `~/.ollama`; models already pulled are
-not moved. `root` is refused as a service user, and so is any existing account
-with uid 0. GPU access depends on group membership: NVIDIA device nodes are
+not moved. `root` is refused as a service user. An EXISTING account is adopted only
+when it is already a dedicated system account: uid 1 to 999, a nologin shell
+(`/usr/sbin/nologin`, `/sbin/nologin`, `/usr/bin/nologin`, `/bin/false`), a home
+under `/var/lib`, and no groups beyond its own group, `video` and `render`.
+Anything else (a login or CI account, a uid of 1000 or more) stops the install
+before anything changes, with the reason; pick another name and it is created for
+you. GPU access depends on group membership: NVIDIA device nodes are
 often restricted to the `video` or `render` group, so the installer adds the
 service user to whichever of those groups exist on the server (confirmed with
 `getent`) and prints which it added. If neither exists, nothing is added and
@@ -180,6 +185,17 @@ you must grant device access yourself. `remote/setup-warmup.sh` validates
 `FRANKEN_BIND_ADDR` and the boot warmup checks readiness at that address when
 set (localhost otherwise). Unset or empty `MemoryMax`/`TasksMax` writes no line. The text
 rendering is tested by `tests/test-unit-render.sh`.
+
+The service swap is staged and reversible. The server script runs with
+`set -euo pipefail`. The two units are rendered into a private staging directory and
+checked with `systemd-analyze verify` (when available) before anything is changed.
+The default `ollama.service` is stopped (it holds port 11434), the new units are
+installed by atomic rename, started, and health-checked (the unit is active and
+`/api/tags` answers on its port); only then are they enabled and the default service
+disabled, its unit file removed and masked. If any step after the staging fails, the
+installer restores the earlier unit files and the earlier active, enabled and masked
+state of `ollama.service`, `ollama-gpu0` and `ollama-gpu1`. A system account created
+earlier in the same run is kept. Covered by `tests/test-install-flow.sh`.
 
 `FRANKEN_REQUIRE_GPU=true` adds `ExecStartPre=<absolute path of nvidia-smi> -L` before
 `ExecStart` in each unit. If the NVIDIA driver fails to load (for example after a

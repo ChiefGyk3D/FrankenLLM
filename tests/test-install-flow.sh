@@ -45,6 +45,8 @@ for t in bash sh cat cut grep egrep head tail wc seq tee mktemp rm mkdir install
     p="$(command -v "$t" 2> /dev/null || true)"
     case "$p" in /*) ln -sf "$p" "$TOOLS/$t" ;; esac
 done
+# "test" is a shell builtin for command -v, but sudo stub needs a real program
+ln -sf "$(type -P test)" "$TOOLS/test"
 mkdir -p "$TOOLS/nozstd"
 
 # --- fake release artifact -----------------------------------------------------------------
@@ -73,8 +75,13 @@ for a in "$@"; do
     args+=("$a")
 done
 case "${args[0]}" in
-    mkdir|install|mv|tee|rm|tar|cp|chmod|systemctl|systemd-analyze) exec "${args[@]}" ;;
-    useradd) echo "useradd ${args[*]}" >> "$STUB_LOG"; exit 0 ;;
+    mkdir|install|mv|tee|rm|tar|cp|chmod|test|systemctl|systemd-analyze) exec "${args[@]}" ;;
+    useradd)
+        echo "useradd ${args[*]}" >> "$STUB_LOG"
+        name="${args[${#args[@]}-1]}"
+        echo "$name:x:998:998::/var/lib/$name:/usr/sbin/nologin" >> "$STUB_PASSWD"
+        echo "$name:$name" >> "$STUB_GROUPS"
+        exit 0 ;;
     usermod) echo "usermod ${args[*]}" >> "$STUB_LOG"; exit 0 ;;
     *) echo "sudo: unsupported ${args[*]}" >> "$STUB_LOG"; exit 1 ;;
 esac
@@ -97,9 +104,12 @@ for u in "${units[@]}"; do
         disable) rm -f "$STUB_STATE/enabled.$u" ;;
         mask) touch "$STUB_STATE/masked.$u" ;;
         unmask) rm -f "$STUB_STATE/masked.$u" ;;
-        is-active) [ -f "$STUB_STATE/active.$u" ] || rc=3 ;;
-        is-enabled) [ -f "$STUB_STATE/enabled.$u" ] || rc=1 ;;
-        is-masked) [ -f "$STUB_STATE/masked.$u" ] || rc=1 ;;
+        is-active)
+            if [ "$u" = "${STUB_FAIL_ACTIVE:-}" ] || [ ! -f "$STUB_STATE/active.$u" ]; then rc=3; fi ;;
+        is-enabled)
+            if [ -f "$STUB_STATE/masked.$u" ]; then echo masked; rc=1
+            elif [ -f "$STUB_STATE/enabled.$u" ]; then echo enabled
+            else echo disabled; rc=1; fi ;;
         *) ;;
     esac
 done
@@ -107,6 +117,7 @@ exit $rc
 STUB
 cat > "$STUB/nvidia-smi" << 'STUB'
 #!/bin/bash
+[ -n "${STUB_SMI_FAIL:-}" ] && exit 1
 echo "GPU 0: Stub A (UUID: GPU-0)"
 echo "GPU 1: Stub B (UUID: GPU-1)"
 STUB
@@ -122,7 +133,7 @@ while [ $# -gt 0 ]; do
         *) shift ;;
     esac
 done
-if [ -z "$out" ]; then exit 0; fi      # health probes and friends
+if [ -z "$out" ] || [ "$out" = /dev/null ]; then exit 0; fi      # health probes and friends
 case "$url" in
     https://ollama.com/install.sh) printf '#!/bin/sh\necho upstream-script-ran >> "$STUB_LOG"\n' > "$out" ;;
     *) cp "$STUB_ARTIFACT" "$out" ;;
@@ -244,7 +255,7 @@ mkdir -p "$FAKE/usr/local/bin"
 cp "$WORK/art/bin/ollama" "$FAKE/usr/local/bin/ollama"
 run_server -- "${A[@]}"
 check "existing install kept" "yes" "$(grep -q 'Ollama already installed' <<< "$OUT" && echo yes || echo no)"
-check "existing install kept: nothing fetched" "0" "$(grep -c '^curl' <<< "$LOGTXT" || true)"
+check "existing install kept: nothing downloaded" "0" "$(grep -c '^curl .*\(github\.com\|ollama\.com\)' <<< "$LOGTXT" || true)"
 # h. bad values reaching the server script are refused
 for bad in "nothex" "${GOOD_SHA^^}"; do
     reset_root
@@ -261,6 +272,141 @@ mapfile -t H < <(args "11434; touch $WORK/PWNED" 11435)
 run_server -- "${H[@]}"
 check "hostile port refused on the server" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
 check "hostile port: nothing executed" "no" "$([ -e "$WORK/PWNED" ] && echo yes || echo no)"
+
+seed_ollama() { mkdir -p "$FAKE/usr/local/bin"; cp "$WORK/art/bin/ollama" "$FAKE/usr/local/bin/ollama"; }
+UNITDIR="$FAKE/etc/systemd/system"
+# a pre-existing default service: unit file, active, enabled
+seed_default() {
+    printf '[Service]\nExecStart=/usr/local/bin/ollama serve\n# ORIGINAL-DEFAULT\n' > "$UNITDIR/ollama.service"
+    touch "$STATE/active.ollama" "$STATE/enabled.ollama"
+}
+state_of() { [ -f "$STATE/$1.$2" ] && echo yes || echo no; }
+line_of() { grep -n -m1 -F -- "$1" <<< "$LOGTXT" | cut -d: -f1; }
+
+echo "--- F7: staged install, health check, rollback ---"
+# success: replacements started and healthy BEFORE the default service is retired
+reset_root; seed_ollama; seed_default
+run_server -- "${A[@]}"
+check "success: rc" "0" "$RC"
+check "success: gpu0 active+enabled" "yes yes" "$(state_of active ollama-gpu0) $(state_of enabled ollama-gpu0)"
+check "success: gpu1 active+enabled" "yes yes" "$(state_of active ollama-gpu1) $(state_of enabled ollama-gpu1)"
+check "success: default masked, stopped, unit file gone" "yes no no" "$(state_of masked ollama) $(state_of active ollama) $([ -e "$UNITDIR/ollama.service" ] && echo yes || echo no)"
+check "success: unit text installed (User line)" "User=tester" "$(grep '^User=' "$UNITDIR/ollama-gpu0.service")"
+check "success: no staging files left in the unit dir" "" "$(find "$UNITDIR" -mindepth 1 -maxdepth 1 -name '.*' -printf '%f\n')"
+check "success: units verified before any unit was installed" "yes" \
+    "$([ "$(line_of 'systemd-analyze verify')" -lt "$(line_of '.ollama-gpu0.service.new')" ] && echo yes || echo no)"
+check "success: replacement started before the default is masked" "yes" \
+    "$([ "$(line_of 'systemctl start ollama-gpu1.service')" -lt "$(line_of 'systemctl mask ollama.service')" ] && echo yes || echo no)"
+check "success: default only disabled after the replacements are enabled" "yes" \
+    "$([ "$(line_of 'systemctl enable ollama-gpu1.service')" -lt "$(line_of 'systemctl disable ollama.service')" ] && echo yes || echo no)"
+check "success: health probed on the unit port" "yes" "$(grep -q 'http://localhost:11434/api/tags' <<< "$LOGTXT" && echo yes || echo no)"
+
+# a replacement fails to start: everything is put back
+reset_root; seed_ollama; seed_default
+run_server STUB_FAIL_START=ollama-gpu1 -- "${A[@]}"
+check "start fails: rc" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "start fails: says it restores" "yes" "$(grep -q 'restoring the previous service state' <<< "$OUT" && echo yes || echo no)"
+check "start fails: default unit file restored byte for byte" "yes" "$(grep -q 'ORIGINAL-DEFAULT' "$UNITDIR/ollama.service" 2> /dev/null && echo yes || echo no)"
+check "start fails: default active+enabled again, not masked" "yes yes no" "$(state_of active ollama) $(state_of enabled ollama) $(state_of masked ollama)"
+check "start fails: no replacement unit files left" "" "$(find "$UNITDIR" -mindepth 1 -maxdepth 1 ! -name ollama.service -printf '%f\n')"
+check "start fails: no replacement left running or enabled" "no no no no" "$(state_of active ollama-gpu0) $(state_of active ollama-gpu1) $(state_of enabled ollama-gpu0) $(state_of enabled ollama-gpu1)"
+
+# a replacement starts but never answers: same
+reset_root; seed_ollama; seed_default
+run_server STUB_FAIL_ACTIVE=ollama-gpu0 -- "${A[@]}"
+check "unhealthy: rc" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "unhealthy: default restored and running" "yes yes no" "$(state_of active ollama) $(state_of enabled ollama) $(state_of masked ollama)"
+check "unhealthy: no replacement unit files left" "" "$(find "$UNITDIR" -mindepth 1 -maxdepth 1 ! -name ollama.service -printf '%f\n')"
+
+# earlier replacement units (an upgrade): their old text and state come back
+reset_root; seed_ollama
+printf '[Service]\n# OLD-GPU0\n' > "$UNITDIR/ollama-gpu0.service"
+touch "$STATE/active.ollama-gpu0" "$STATE/enabled.ollama-gpu0"
+run_server STUB_FAIL_START=ollama-gpu1 -- "${A[@]}"
+check "upgrade fails: old gpu0 unit text back" "yes" "$(grep -q 'OLD-GPU0' "$UNITDIR/ollama-gpu0.service" && echo yes || echo no)"
+check "upgrade fails: old gpu0 running+enabled again" "yes yes" "$(state_of active ollama-gpu0) $(state_of enabled ollama-gpu0)"
+check "upgrade fails: no gpu1 unit file" "no" "$([ -e "$UNITDIR/ollama-gpu1.service" ] && echo yes || echo no)"
+
+# a unit that does not verify: nothing is touched
+reset_root; seed_ollama; seed_default
+run_server STUB_VERIFY_FAIL=1 -- "${A[@]}"
+check "verify fails: rc" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "verify fails: default untouched" "yes yes no" "$(state_of active ollama) $(state_of enabled ollama) $(state_of masked ollama)"
+check "verify fails: no systemctl mutation" "0" "$(grep -c '^sudo systemctl' <<< "$LOGTXT" || true)"
+check "verify fails: no unit written" "ORIGINAL-DEFAULT-only" "$(ls -A "$UNITDIR" | tr '\n' ' ' | sed 's/^ollama.service $/ORIGINAL-DEFAULT-only/')"
+
+# set -euo pipefail: a failing nvidia-smi inside the GPU count pipeline stops the install
+reset_root; seed_ollama; seed_default
+run_server STUB_SMI_FAIL=1 -- "${A[@]}"
+check "pipefail: failing nvidia-smi stops the install" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "pipefail: nothing changed" "0" "$(grep -c '^sudo' <<< "$LOGTXT" || true)"
+check "server script runs with errexit, nounset and pipefail" "yes" "$(grep -q '^set -euo pipefail$' "$REPO/remote/server-install.sh" && echo yes || echo no)"
+
+# no network bytes are piped into a shell anywhere in the remote installer
+PIPE_RE='(curl|wget)[^#]*\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh'
+check "guard bites: the pattern matches a piped install" "yes" "$(grep -qE "$PIPE_RE" <<< 'curl -fsSL https://x.invalid/install.sh | sh' && echo yes || echo no)"
+check "no curl|sh in the remote installer files" "" "$(grep -nE "$PIPE_RE" "$REPO/remote/install.sh" "$REPO/remote/server-install.sh" "$REPO/remote/unit-lib.sh" || true)"
+
+echo "--- F8: service account policy ---"
+set_account() {  # set_account NAME UID SHELL HOME "GROUPS"
+    echo "$1:x:$2:$2::$4:$3" > "$WORK/stubdata/passwd"
+    echo "$1:$5" > "$WORK/stubdata/groups"
+}
+# shellcheck source=../remote/unit-lib.sh
+source "$REPO/remote/unit-lib.sh"
+for case_ in "ci 1001 /bin/bash /home/ci ci@uid" \
+             "svc 998 /bin/bash /var/lib/svc svc@login shell" \
+             "svc 998 /usr/sbin/nologin /home/svc svc@var/lib" \
+             "svc 998 /usr/sbin/nologin /var/lib/svc svc docker@docker" \
+             "svc 998 /usr/sbin/nologin /var/lib/svc svc sudo@sudo" \
+             "svc 1000 /usr/sbin/nologin /var/lib/svc svc@uid" \
+             "svc 0 /usr/sbin/nologin /var/lib/svc svc@uid" \
+             "svc 998 /usr/sbin/nologin /var/lib/../../home/x svc@var/lib" \
+             "svc 998 /usr/sbin/nologin /var/libx/svc svc@var/lib"; do
+    spec="${case_%%@*}"; want="${case_#*@}"
+    read -r n u sh h _ <<< "$spec"
+    # shellcheck disable=SC2086  # the group list is a space separated word list
+    set_account "$n" "$u" "$sh" "$h" "${spec#"$n $u $sh $h "}"
+    why="$(franken_check_service_account "$n" "$u" "$sh" "$h" "${spec#"$n $u $sh $h "}")"
+    check "policy refuses [$spec]" "refused" "$([ -n "$why" ] && echo refused || echo accepted)"
+    check "policy says why [$spec]" "yes" "$(grep -qiE "$want" <<< "$why" && echo yes || echo no)"
+done
+for spec in "svc 998 /usr/sbin/nologin /var/lib/svc svc" "svc 1 /usr/sbin/nologin /var/lib/svc/x svc video render" \
+            "svc 999 /bin/false /var/lib/svc svc video" "svc 150 /sbin/nologin /var/lib/svc svc"; do
+    read -r n u sh h _ <<< "$spec"
+    check "policy accepts [$spec]" "ok" "$(franken_check_service_account "$n" "$u" "$sh" "$h" "${spec#"$n $u $sh $h "}" > /dev/null && echo ok || echo refused)"
+done
+
+# end to end: an existing login account is refused before anything changes
+reset_root; seed_ollama; seed_default
+set_account ci 1001 /bin/bash /home/ci "ci docker sudo"
+mapfile -t U < <(args 11434 11435 "" ci)
+run_server -- "${U[@]}"
+check "existing login account: refused" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "existing login account: message" "yes" "$(grep -q 'not a system account' <<< "$OUT" && echo yes || echo no)"
+check "existing login account: no usermod, no sudo at all" "0" "$(grep -c '^sudo\|^usermod' <<< "$LOGTXT" || true)"
+check "existing login account: default untouched" "yes yes no" "$(state_of active ollama) $(state_of enabled ollama) $(state_of masked ollama)"
+# an existing account with an extra group
+reset_root; seed_ollama; seed_default
+set_account svc 998 /usr/sbin/nologin /var/lib/svc "svc video docker"
+mapfile -t U < <(args 11434 11435 "" svc)
+run_server -- "${U[@]}"
+check "existing account with extra group: refused" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "existing account with extra group: no usermod" "0" "$(grep -c '^usermod' <<< "$LOGTXT" || true)"
+# a proper existing dedicated account is accepted and used
+reset_root; seed_ollama; seed_default
+set_account svc 998 /usr/sbin/nologin /var/lib/svc "svc video"
+mapfile -t U < <(args 11434 11435 "" svc)
+run_server -- "${U[@]}"
+check "dedicated account: rc" "0" "$RC"
+check "dedicated account: units run as it" "User=svc" "$(grep '^User=' "$UNITDIR/ollama-gpu0.service")"
+check "dedicated account: models under its home" "yes" "$(grep -q "^Environment=\"OLLAMA_MODELS=/var/lib/svc/.ollama/models-gpu0\"" "$UNITDIR/ollama-gpu0.service" && echo yes || echo no)"
+# a missing account is created as a system account with nologin
+reset_root; seed_ollama; seed_default
+mapfile -t U < <(args 11434 11435 "" newsvc)
+run_server -- "${U[@]}"
+check "missing account: created as a system nologin account" "yes" "$(grep -q '^sudo useradd --system --create-home --home-dir /var/lib/newsvc --shell /usr/sbin/nologin newsvc$' <<< "$LOGTXT" && echo yes || echo no)"
+check "missing account: units run as it" "User=newsvc" "$(grep '^User=' "$UNITDIR/ollama-gpu0.service")"
 
 check "repo root has no untracked files" "" "$(git -C "$REPO" status --porcelain --untracked-files=all 2>/dev/null | grep '^??' | grep -v 'tests/test-\|ollama-checksums')"
 

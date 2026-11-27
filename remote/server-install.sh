@@ -6,7 +6,7 @@
 # Arguments: GPU0_PORT GPU1_PORT BIND_ADDR SERVICE_USER MEMORY_MAX TASKS_MAX
 #            OLLAMA_PIN REQUIRE_GPU OLLAMA_SHA256 OLLAMA_SHA256_ASSET
 #            ALLOW_UNVERIFIED_OLLAMA
-set -e
+set -euo pipefail
 
 GPU0_PORT="${1:-11434}"
 GPU1_PORT="${2:-11435}"
@@ -90,6 +90,23 @@ if [ "$GPU_COUNT" -lt 2 ]; then
     echo ""
 fi
 
+# Service account: default is the invoking user. FRANKEN_SERVICE_USER names a
+# dedicated system account (nologin shell, home under /var/lib) that is created
+# when missing. An EXISTING account is adopted only when it already matches that
+# policy, so a login or CI account can never become the service account. This
+# check is read-only and runs before anything is installed or changed.
+if [ -n "$SERVICE_USER" ] && id "$SERVICE_USER" &> /dev/null; then
+    PW_LINE="$(getent passwd "$SERVICE_USER")"
+    IFS=: read -r _ _ ACCT_UID _ _ ACCT_HOME ACCT_SHELL <<< "$PW_LINE"
+    ACCT_GROUPS="$(id -Gn "$SERVICE_USER")"
+    if ! ACCT_WHY="$(franken_check_service_account "$SERVICE_USER" "$ACCT_UID" "$ACCT_SHELL" "$ACCT_HOME" "$ACCT_GROUPS")"; then
+        echo "❌ $ACCT_WHY"
+        echo "   Refusing to run the services as an existing account that is not a dedicated"
+        echo "   system account. Pick another FRANKEN_SERVICE_USER (it is created for you)."
+        exit 1
+    fi
+fi
+
 # Install Ollama
 echo "Installing Ollama..."
 # An existing install is kept unless a pin is set and it differs.
@@ -136,18 +153,8 @@ if [ -n "$OLLAMA_PIN" ] && [ "$FINAL_VERSION" != "$OLLAMA_PIN" ]; then
 fi
 echo ""
 
-# Disable and MASK default Ollama service to prevent it from ever starting
-# (even after Ollama updates which may try to re-enable it)
-echo "Disabling and masking default ollama service..."
-sudo systemctl stop ollama.service 2>/dev/null || true
-sudo systemctl disable ollama.service 2>/dev/null || true
-sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
-sudo systemctl daemon-reload
-sudo systemctl mask ollama.service 2>/dev/null || true
-echo "✅ Default ollama.service masked (permanently prevented from starting)"
-
-# Service account: default is the invoking user. FRANKEN_SERVICE_USER creates a
-# system account (nologin shell, own home for models) when it is missing.
+# Service account: create it when it is missing (the policy check above covered
+# an existing one).
 if [ -n "$SERVICE_USER" ]; then
     if ! id "$SERVICE_USER" &> /dev/null; then
         echo "Creating system account $SERVICE_USER..."
@@ -182,35 +189,148 @@ else
     mkdir -p "$MODELS_BASE/models-gpu1"
 fi
 
-# Create systemd service for GPU 0
-echo "Creating systemd service for GPU 0 (port $GPU0_PORT)..."
-franken_render_unit 0 "$GPU0_PORT" "$MODELS_BASE/models-gpu0" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" "$REQUIRE_GPU" "$NVIDIA_SMI_PATH" \
-    | sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null
-
+# ---------------------------------------------------------------------------
+# Replace the default ollama.service with one service per GPU, safely.
+#   1. render the units into a private staging directory and verify them
+#   2. remember the prior state (unit files, active, enabled, masked)
+#   3. stop the default service (it holds port 11434), install the new units
+#      atomically, start them and health-check them
+#   4. only then retire the default service for good (disable, remove, mask)
+# Any failure after step 2 restores the prior state (trap on EXIT).
+# ---------------------------------------------------------------------------
+UNIT_DIR=/etc/systemd/system
+UNITS=(ollama-gpu0)
+PORTS=("$GPU0_PORT")
 if [ "$GPU_COUNT" -ge 2 ]; then
-    # Create systemd service for GPU 1
-    echo "Creating systemd service for GPU 1 (port $GPU1_PORT)..."
-    franken_render_unit 1 "$GPU1_PORT" "$MODELS_BASE/models-gpu1" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" "$REQUIRE_GPU" "$NVIDIA_SMI_PATH" \
-        | sudo tee /etc/systemd/system/ollama-gpu1.service > /dev/null
+    UNITS+=(ollama-gpu1)
+    PORTS+=("$GPU1_PORT")
 fi
 
-# Reload systemd
+STAGE="$(mktemp -d)"
+mkdir -p "$STAGE/backup"
+ROLLBACK_ARMED=0
+
+declare -A WAS_ACTIVE=() WAS_ENABLED=() WAS_FILE=()
+DEFAULT_WAS_ACTIVE=0
+DEFAULT_WAS_ENABLED=0
+DEFAULT_WAS_MASKED=0
+DEFAULT_WAS_FILE=0
+
+# restore_unit_file NAME - put the backed-up unit file back, atomically
+restore_unit_file() {
+    sudo install -m 0644 -o root -g root "$STAGE/backup/$1.service" "$UNIT_DIR/.$1.service.new" \
+        && sudo mv -f "$UNIT_DIR/.$1.service.new" "$UNIT_DIR/$1.service"
+}
+
+finish() {
+    local rc=$? u
+    trap - EXIT
+    set +e
+    if [ "$ROLLBACK_ARMED" -eq 1 ] && [ "$rc" -ne 0 ]; then
+        echo ""
+        echo "❌ Installation failed (exit $rc); restoring the previous service state..."
+        for u in "${UNITS[@]}"; do
+            sudo systemctl stop "$u.service" 2> /dev/null
+            sudo systemctl disable "$u.service" 2> /dev/null
+            if [ "${WAS_FILE[$u]}" = "1" ]; then
+                restore_unit_file "$u"
+            else
+                sudo rm -f -- "${UNIT_DIR:?}/$u.service" "${UNIT_DIR:?}/.$u.service.new"
+            fi
+        done
+        if [ "$DEFAULT_WAS_FILE" = "1" ]; then
+            restore_unit_file ollama
+        fi
+        if [ "$DEFAULT_WAS_MASKED" -eq 0 ]; then
+            sudo systemctl unmask ollama.service 2> /dev/null
+        fi
+        sudo systemctl daemon-reload
+        for u in "${UNITS[@]}"; do
+            [ "${WAS_ENABLED[$u]}" = "1" ] && sudo systemctl enable "$u.service" 2> /dev/null
+            [ "${WAS_ACTIVE[$u]}" = "1" ] && sudo systemctl start "$u.service" 2> /dev/null
+        done
+        [ "$DEFAULT_WAS_ENABLED" -eq 1 ] && sudo systemctl enable ollama.service 2> /dev/null
+        [ "$DEFAULT_WAS_ACTIVE" -eq 1 ] && sudo systemctl start ollama.service 2> /dev/null
+        echo "   Previous state restored; see the error above."
+    fi
+    rm -rf -- "${STAGE:?}"
+    exit "$rc"
+}
+trap finish EXIT
+
+# 1. stage and verify
+echo "Staging systemd units..."
+for i in "${!UNITS[@]}"; do
+    gpu="${UNITS[$i]#ollama-gpu}"
+    franken_render_unit "$gpu" "${PORTS[$i]}" "$MODELS_BASE/models-gpu$gpu" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" "$REQUIRE_GPU" "$NVIDIA_SMI_PATH" \
+        > "$STAGE/${UNITS[$i]}.service"
+    if command -v systemd-analyze &> /dev/null; then
+        if ! systemd-analyze verify "$STAGE/${UNITS[$i]}.service"; then
+            echo "❌ systemd-analyze rejected the generated ${UNITS[$i]}.service; nothing was changed"
+            exit 1
+        fi
+    else
+        echo "⚠️  systemd-analyze not found; the generated units were not verified"
+    fi
+done
+
+# 2. remember the prior state
+if systemctl is-active --quiet ollama.service 2> /dev/null; then DEFAULT_WAS_ACTIVE=1; fi
+DEFAULT_STATE="$(systemctl is-enabled ollama.service 2> /dev/null || true)"
+if [ "$DEFAULT_STATE" = "enabled" ]; then DEFAULT_WAS_ENABLED=1; fi
+if [ "$DEFAULT_STATE" = "masked" ]; then DEFAULT_WAS_MASKED=1; fi
+if sudo test -f "$UNIT_DIR/ollama.service"; then
+    DEFAULT_WAS_FILE=1
+    sudo cp -p "$UNIT_DIR/ollama.service" "$STAGE/backup/ollama.service"
+fi
+for u in "${UNITS[@]}"; do
+    WAS_ACTIVE[$u]=0
+    WAS_ENABLED[$u]=0
+    WAS_FILE[$u]=0
+    if systemctl is-active --quiet "$u.service" 2> /dev/null; then WAS_ACTIVE[$u]=1; fi
+    if [ "$(systemctl is-enabled "$u.service" 2> /dev/null || true)" = "enabled" ]; then WAS_ENABLED[$u]=1; fi
+    if sudo test -f "$UNIT_DIR/$u.service"; then
+        WAS_FILE[$u]=1
+        sudo cp -p "$UNIT_DIR/$u.service" "$STAGE/backup/$u.service"
+    fi
+done
+ROLLBACK_ARMED=1
+
+# 3. swap in the replacements and prove they work
+echo "Stopping the default ollama service (it uses port 11434)..."
+sudo systemctl stop ollama.service 2> /dev/null || true
+for u in "${UNITS[@]}"; do
+    echo "Installing $u.service..."
+    sudo install -m 0644 -o root -g root "$STAGE/$u.service" "$UNIT_DIR/.$u.service.new"
+    sudo mv -f "$UNIT_DIR/.$u.service.new" "$UNIT_DIR/$u.service"
+done
 echo "Reloading systemd..."
 sudo systemctl daemon-reload
-
-# Start services
 echo "Starting services..."
-sudo systemctl start ollama-gpu0
-if [ "$GPU_COUNT" -ge 2 ]; then
-    sudo systemctl start ollama-gpu1
-fi
-
-# Enable on boot
+for u in "${UNITS[@]}"; do
+    sudo systemctl start "$u.service"
+done
+for i in "${!UNITS[@]}"; do
+    echo "Waiting for ${UNITS[$i]} to answer..."
+    if ! franken_wait_unit_ready "${UNITS[$i]}.service" "$(franken_ready_url "$BIND_ADDR" "${PORTS[$i]}")" 40; then
+        echo "❌ ${UNITS[$i]} did not become ready"
+        exit 1
+    fi
+done
 echo "Enabling services on boot..."
-sudo systemctl enable ollama-gpu0
-if [ "$GPU_COUNT" -ge 2 ]; then
-    sudo systemctl enable ollama-gpu1
-fi
+for u in "${UNITS[@]}"; do
+    sudo systemctl enable "$u.service"
+done
+
+# 4. the replacements work: retire the default service for good. Disable and MASK
+# it so Ollama updates can never start it again.
+echo "Disabling and masking default ollama service..."
+sudo systemctl disable ollama.service 2> /dev/null || true
+sudo rm -f /etc/systemd/system/ollama.service
+sudo systemctl daemon-reload
+sudo systemctl mask ollama.service 2> /dev/null || true
+ROLLBACK_ARMED=0
+echo "✅ Default ollama.service masked (permanently prevented from starting)"
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
