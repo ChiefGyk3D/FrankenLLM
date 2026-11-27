@@ -441,7 +441,12 @@ for v in $'a\nurl = "http://evil.test/"' $'a\rb' $'a\tb' $'a\033b'; do
     check "control character refused, no config text" "$(cat "$WORK/o.log")" "rc=1"
 done
 
-echo "a newline-injected URL never reaches the network (real curl, local listener)"
+# SMOKE TEST ONLY. This runs the real curl against a local listener to show the
+# whole path with a hostile value ends in a refused delivery and no connection.
+# It does NOT prove the newline-injection fix: the old code also made no
+# connection with this payload. That proof is the "config writer refuses line
+# breaks" tests above, which fail on the old code.
+echo "smoke: hostile URL ends in a refused delivery, no connection (real curl, local listener)"
 REALCURL=$(PATH=/usr/bin:/bin command -v curl || true)
 REALPY=$(PATH=/usr/bin:/bin command -v python3 || true)
 if [ -n "$REALCURL" ] && [ -n "$REALPY" ]; then
@@ -468,10 +473,10 @@ PY
     env -i PATH=/usr/bin:/bin bash -c 'source "$1"; DISCORD_WEBHOOK_URL=$2; notify_discord problem t b; echo "rc=$?"' _ "$SCRIPTS/watchdog-notify.sh" "$INJ" > "$WORK/o.log" 2>&1
     kill "$LPID" 2> /dev/null
     wait "$LPID" 2> /dev/null
-    check "listener was never contacted" "$(test -e "$WORK/hit" && echo CONNECTED || echo blocked)" blocked
+    check "smoke: listener was not contacted" "$(test -e "$WORK/hit" && echo CONNECTED || echo blocked)" blocked
     contains "delivery reported as failed" "$WORK/o.log" "rc=1"
 else
-    echo "  skip real-curl test: curl or python3 missing"
+    echo "  skip real-curl smoke test: curl or python3 missing"
 fi
 
 echo "email is always TLS"
