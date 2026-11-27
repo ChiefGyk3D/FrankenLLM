@@ -36,6 +36,7 @@ FRANKEN_SERVICE_USER="${FRANKEN_SERVICE_USER:-}"
 FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
 FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
 FRANKEN_OLLAMA_VERSION="${FRANKEN_OLLAMA_VERSION:-}"
+FRANKEN_REQUIRE_GPU="${FRANKEN_REQUIRE_GPU:-}"
 if [ -n "$FRANKEN_BIND_ADDR" ] && ! franken_valid_bind_addr "$FRANKEN_BIND_ADDR"; then
     echo "❌ FRANKEN_BIND_ADDR must be an IPv4 address (e.g. 192.0.2.10)"
     exit 1
@@ -54,6 +55,10 @@ if [ -n "$FRANKEN_TASKS_MAX" ] && ! franken_valid_tasks_max "$FRANKEN_TASKS_MAX"
 fi
 if [ -n "$FRANKEN_OLLAMA_VERSION" ] && ! franken_valid_ollama_version "$FRANKEN_OLLAMA_VERSION"; then
     echo "❌ FRANKEN_OLLAMA_VERSION must look like 0.33.2 or 0.34.0-rc1"
+    exit 1
+fi
+if [ -n "$FRANKEN_REQUIRE_GPU" ] && ! franken_valid_require_gpu "$FRANKEN_REQUIRE_GPU"; then
+    echo "❌ FRANKEN_REQUIRE_GPU must be true or false"
     exit 1
 fi
 if [ -z "$FRANKEN_OLLAMA_VERSION" ]; then
@@ -89,6 +94,7 @@ SERVICE_USER="${4:-}"
 MEMORY_MAX="${5:-}"
 TASKS_MAX="${6:-}"
 OLLAMA_PIN="${7:-}"
+REQUIRE_GPU="${8:-}"
 
 # --- unit-lib.sh is appended here by remote/install.sh ---
 ENDSCRIPT
@@ -97,7 +103,7 @@ cat >> /tmp/frankenllm-remote-install.sh << 'ENDSCRIPT'
 
 for v in "$BIND_ADDR:franken_valid_bind_addr" "$SERVICE_USER:franken_valid_service_user" \
          "$MEMORY_MAX:franken_valid_memory_max" "$TASKS_MAX:franken_valid_tasks_max" \
-         "$OLLAMA_PIN:franken_valid_ollama_version"; do
+         "$OLLAMA_PIN:franken_valid_ollama_version" "$REQUIRE_GPU:franken_valid_require_gpu"; do
     if [ -n "${v%%:*}" ] && ! "${v##*:}" "${v%%:*}"; then
         echo "❌ Invalid value for ${v##*:}"
         exit 1
@@ -121,6 +127,19 @@ echo "Checking for NVIDIA GPUs..."
 if ! command -v nvidia-smi &> /dev/null; then
     echo "❌ nvidia-smi not found. Please install NVIDIA drivers first."
     exit 1
+fi
+
+# Absolute nvidia-smi path for the optional ExecStartPre guard (systemd needs
+# an absolute path). Only resolved and checked when the guard is on.
+NVIDIA_SMI_PATH=""
+if [ "$REQUIRE_GPU" = "true" ]; then
+    NVIDIA_SMI_PATH="$(command -v nvidia-smi || true)"
+    if ! franken_valid_nvidia_smi_path "$NVIDIA_SMI_PATH"; then
+        echo "❌ FRANKEN_REQUIRE_GPU=true but nvidia-smi has no usable absolute path (found: '${NVIDIA_SMI_PATH}')"
+        echo "   It must match ^/[A-Za-z0-9/_.-]+$ ; install the NVIDIA driver tools or unset the guard."
+        exit 1
+    fi
+    echo "✅ GPU guard on: units will run $NVIDIA_SMI_PATH -L before ollama starts"
 fi
 
 GPU_COUNT=$(nvidia-smi --list-gpus | wc -l)
@@ -207,13 +226,13 @@ fi
 
 # Create systemd service for GPU 0
 echo "Creating systemd service for GPU 0 (port $GPU0_PORT)..."
-franken_render_unit 0 "$GPU0_PORT" "$MODELS_BASE/models-gpu0" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" \
+franken_render_unit 0 "$GPU0_PORT" "$MODELS_BASE/models-gpu0" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" "$REQUIRE_GPU" "$NVIDIA_SMI_PATH" \
     | sudo tee /etc/systemd/system/ollama-gpu0.service > /dev/null
 
 if [ "$GPU_COUNT" -ge 2 ]; then
     # Create systemd service for GPU 1
     echo "Creating systemd service for GPU 1 (port $GPU1_PORT)..."
-    franken_render_unit 1 "$GPU1_PORT" "$MODELS_BASE/models-gpu1" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" \
+    franken_render_unit 1 "$GPU1_PORT" "$MODELS_BASE/models-gpu1" "$UNIT_USER" "$BIND_ADDR" "$MEMORY_MAX" "$TASKS_MAX" "$REQUIRE_GPU" "$NVIDIA_SMI_PATH" \
         | sudo tee /etc/systemd/system/ollama-gpu1.service > /dev/null
 fi
 
@@ -260,7 +279,7 @@ echo "Connecting to $FRANKEN_SERVER_IP and running installation..."
 echo "You will be prompted for sudo password on the remote server."
 echo ""
 
-ssh -t "$FRANKEN_SERVER_IP" "bash /tmp/frankenllm-remote-install.sh $FRANKEN_GPU0_PORT $FRANKEN_GPU1_PORT '$FRANKEN_BIND_ADDR' '$FRANKEN_SERVICE_USER' '$FRANKEN_MEMORY_MAX' '$FRANKEN_TASKS_MAX' '$FRANKEN_OLLAMA_VERSION' && rm /tmp/frankenllm-remote-install.sh"
+ssh -t "$FRANKEN_SERVER_IP" "bash /tmp/frankenllm-remote-install.sh $FRANKEN_GPU0_PORT $FRANKEN_GPU1_PORT '$FRANKEN_BIND_ADDR' '$FRANKEN_SERVICE_USER' '$FRANKEN_MEMORY_MAX' '$FRANKEN_TASKS_MAX' '$FRANKEN_OLLAMA_VERSION' '$FRANKEN_REQUIRE_GPU' && rm /tmp/frankenllm-remote-install.sh"
 
 # Cleanup local temp file
 rm /tmp/frankenllm-remote-install.sh

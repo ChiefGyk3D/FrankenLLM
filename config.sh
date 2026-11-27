@@ -101,11 +101,18 @@ export FRANKEN_GPU1_WARMUP_TIMEOUT="${FRANKEN_GPU1_WARMUP_TIMEOUT:-120}"
 #                     installer as OLLAMA_VERSION and checked after install.
 #                     Unset = latest, with a warning. The upstream script has no
 #                     checksum step: a pin is reproducible, not integrity-checked.
+# FRANKEN_REQUIRE_GPU  true or false (unset/empty = false). When true, each unit
+#                     gets ExecStartPre=<nvidia-smi> -L, so a missing driver
+#                     (e.g. after a kernel update) makes the unit FAIL instead of
+#                     Ollama quietly running on the CPU. With Restart=always the
+#                     unit then fails and restarts in a loop: the failing unit is
+#                     the signal, there is no CPU fallback. Anything else is rejected.
 export FRANKEN_BIND_ADDR="${FRANKEN_BIND_ADDR:-}"
 export FRANKEN_SERVICE_USER="${FRANKEN_SERVICE_USER:-}"
 export FRANKEN_MEMORY_MAX="${FRANKEN_MEMORY_MAX:-}"
 export FRANKEN_TASKS_MAX="${FRANKEN_TASKS_MAX:-}"
 export FRANKEN_OLLAMA_VERSION="${FRANKEN_OLLAMA_VERSION:-}"
+export FRANKEN_REQUIRE_GPU="${FRANKEN_REQUIRE_GPU:-}"
 
 # Detect if we're installing locally or remotely
 if [[ "$FRANKEN_SERVER_IP" == "localhost" || "$FRANKEN_SERVER_IP" == "127.0.0.1" ]]; then
