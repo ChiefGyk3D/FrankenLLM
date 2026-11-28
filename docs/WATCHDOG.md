@@ -82,7 +82,7 @@ Delivery is tracked per channel. If one channel fails, the next run retries only
 
 ### Secrets from Doppler
 
-Keep the channel values in a Doppler config instead of the env file: put only `DOPPLER_TOKEN` and `WATCHDOG_USE_DOPPLER=true` in `/etc/frankenllm/watchdog.env`, and the watchdog re-runs itself under `doppler run --`. `install-watchdog.sh test` takes the same route, so a channel that exists only in Doppler is tested too; `status` never starts Doppler.
+Keep the channel values in a Doppler config instead of the env file: put only `DOPPLER_TOKEN` and `WATCHDOG_USE_DOPPLER=true` in `/etc/frankenllm/watchdog.env`, and the watchdog re-runs itself under `doppler run --`. The timer does this as an unprivileged user. `install-watchdog.sh test` and `status` run as root and never start Doppler, because whoever can edit the Doppler config could otherwise run code as root; `test` only tries channels set in the settings file and says so. To test the Doppler path, run the unit once: `sudo systemctl start frankenllm-watchdog.service`, then `sudo journalctl -u frankenllm-watchdog.service -n 30`. The installer also pins PATH to system directories and refuses a settings file that is a symbolic link.
 
 ### Stop the driver drifting again
 

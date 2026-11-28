@@ -182,7 +182,12 @@ notify_all() {
             delivered=1
         elif "notify_$ch" "$level" "$title" "$body"; then
             delivered=1
-            _mark "$ch"
+            if ! _mark "$ch"; then
+                # Delivered but not recorded: it would be re-sent every run, so
+                # a tracked delivery counts as failed. No path or secret here.
+                failed=1
+                echo "notify: $ch delivered but the delivery marker could not be written" >&2
+            fi
         else
             failed=1
             echo "notify: $ch delivery failed" >&2
@@ -225,6 +230,10 @@ _marked() {
 _mark() {
     local k
     [ -n "$_MARK_DIR" ] && [ "${#_MARK_KEYS[@]}" -gt 0 ] || return 0
-    mkdir -p "$_MARK_DIR" || return 0
-    for k in "${_MARK_KEYS[@]}"; do : > "$_MARK_DIR/$k.$1"; done
+    mkdir -p "$_MARK_DIR" 2> /dev/null || return 1
+    for k in "${_MARK_KEYS[@]}"; do
+        [ ! -L "$_MARK_DIR/$k.$1" ] || return 1
+        : > "$_MARK_DIR/$k.$1" 2> /dev/null || return 1
+    done
+    return 0
 }

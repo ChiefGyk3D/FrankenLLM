@@ -645,6 +645,32 @@ skew
 run_wd $((T0 + 600)) "${EM[@]}" "$DISCORD"
 check "the problem returns: discord is told again" "$(calls)" 2
 
+echo "a delivery that cannot be recorded counts as failed"
+healthy
+skew
+: > "$WORK/state/.sent" # a file where the marker directory must go: mkdir fails
+run_wd $T0 "$DISCORD"
+check "unrecorded delivery: exit 1" "$(rc)" 1
+check "unrecorded delivery: not recorded as notified" "$(test -e "$WORK/state/gpu-skew" && echo recorded || echo none)" none
+contains "unrecorded delivery: one diagnostic line" "$WORK/out.log" "delivery marker could not be written"
+lacks "unrecorded delivery: no secret in the message" "$WORK/out.log" "secrettoken"
+
+echo "status refuses a settings symlink"
+SLIB="$WORK/status-lib"
+mkdir -p "$SLIB" "$WORK/sbin"
+cp "$SCRIPTS/watchdog-env.sh" "$SLIB/"
+printf '#!/bin/bash\necho "PRINT label=[${WATCHDOG_LABEL:-}]"\n' > "$SLIB/watchdog.sh"
+chmod +x "$SLIB/watchdog.sh"
+printf 'WATCHDOG_LABEL=ViaLink\n' > "$WORK/link-target"
+chmod 600 "$WORK/link-target"
+ln -s "$WORK/link-target" "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SLIB" \
+    bash "$INSTALL" status > "$WORK/o.log" 2>&1
+lacks "status does not read through a symlink" "$WORK/o.log" "ViaLink"
+contains "status says why" "$WORK/o.log" "symbolic link"
+rm -f "$ENVF" "$WORK/link-target"
+rm -rf "$SLIB" "$WORK/sbin"
+
 echo "install-watchdog.sh test still succeeds when one channel delivers"
 healthy
 printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\nSMTP_HOST=smtp.test\nSMTP_FROM=a@test\nEMAIL_TO=b@test\n' > "$ENVF"
@@ -670,7 +696,7 @@ done
 run_install() { # run_install FAIL_ON  -> cmd_install as a stubbed root, rc in o.log
     : > "$ILOG"
     env -i PATH="$IBIN:$BIN:/usr/bin:/bin" STUB_STEPS="$ILOG" STUB_FAIL_ON="$1" \
-        bash -c 'source "$1"; current_uid() { echo 0; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install; echo "rc=$?"' \
+        bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install; echo "rc=$?"' \
         _ "$INSTALL" "$WORK/inst-etc/watchdog.env" "$WORK/inst-lib" "$WORK/inst-units" > "$WORK/o.log" 2>&1
 }
 printf 'WATCHDOG_LABEL=x\n' > "$WORK/inst-etc/watchdog.env"
@@ -689,7 +715,38 @@ for failing in "watchdog-notify.sh" "frankenllm-watchdog.timer" "root:root" "dae
 done
 run_install "watchdog-notify.sh"
 lacks "after a failed copy nothing is enabled" "$ILOG" "systemctl"
+# A planted symbolic link at the settings path must never be chowned or chmodded.
 rm -f "$WORK/inst-etc/watchdog.env"
+printf 'unrelated\n' > "$WORK/link-target"
+chmod 644 "$WORK/link-target"
+ln -s "$WORK/link-target" "$WORK/inst-etc/watchdog.env"
+run_install "@@none@@"
+contains "symlink: refused with a message" "$WORK/o.log" "symbolic link"
+lacks "symlink: no success message" "$WORK/o.log" "Watchdog timer enabled."
+lacks "symlink: rc is not 0" "$WORK/o.log" "rc=0"
+check "symlink: the target keeps its mode" "$(stat -c %a "$WORK/link-target")" 644
+lacks "symlink: nothing was chowned" "$ILOG" "chown"
+rm -f "$WORK/inst-etc/watchdog.env"
+ln -s "$WORK/does-not-exist" "$WORK/inst-etc/watchdog.env"
+run_install "@@none@@"
+contains "dangling symlink: refused" "$WORK/o.log" "symbolic link"
+lacks "dangling symlink: rc is not 0" "$WORK/o.log" "rc=0"
+check "dangling symlink: nothing created at the target" "$(test -e "$WORK/does-not-exist" && echo created || echo absent)" absent
+# test and status refuse it too
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$WORK/inst-etc/watchdog.env" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "test refuses a symlink: exit 1" "$?" 1
+contains "test refuses a symlink: message" "$WORK/o.log" "symbolic link"
+rm -f "$WORK/inst-etc/watchdog.env"
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$WORK/link-target"
+chmod 600 "$WORK/link-target"
+ln -s "$WORK/link-target" "$WORK/inst-etc/watchdog.env"
+healthy
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$WORK/inst-etc/watchdog.env" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "test refuses a symlink to a good file: exit 1" "$?" 1
+check "test refuses a symlink to a good file: nothing sent" "$(calls)" 0
+rm -f "$WORK/inst-etc/watchdog.env" "$WORK/link-target"
 rm -rf "$IBIN" "$ILOG" "$WORK/inst-lib" "$WORK/inst-units" "$WORK/inst-etc"
 
 echo "status loads the same settings the timer run loads"
@@ -727,40 +784,55 @@ contains "status says why" "$WORK/o.log" "group or others can access it"
 rm -f "$ENVF"
 rm -rf "$SLIB" "$WORK/sbin"
 
-echo "test uses the same secrets bootstrap as the timer run"
+echo "test never runs the secrets manager client as root"
 DBIN="$WORK/dbin"
 DLOG="$WORK/doppler.log"
 mkdir -p "$DBIN"
 cat > "$DBIN/doppler" << 'STUB'
 #!/bin/bash
 echo "doppler $*" >> "$STUB_DOPPLER_LOG"
-[ "$1" = run ] && [ "$2" = -- ] || exit 3
-shift 2
-DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/7/fromdoppler exec "$@"
+exit 0
 STUB
 chmod +x "$DBIN/doppler"
 : > "$DLOG"
+healthy
+printf 'WATCHDOG_USE_DOPPLER=true\nDOPPLER_TOKEN=dp.st.fake\nDISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+chmod 600 "$ENVF"
+env -i PATH="$DBIN:$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_DOPPLER_LOG="$DLOG" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "channel in the settings file still tested: exit 0" "$?" 0
+check "channel in the settings file still tested: alert sent" "$(calls)" 1
+check "the secrets client was never invoked" "$(wc -c < "$DLOG" | tr -d ' ')" 0
+contains "says it does not fetch secrets as root" "$WORK/o.log" "does not fetch secrets as root"
+contains "says how to test the secrets path" "$WORK/o.log" "systemctl start frankenllm-watchdog.service"
 healthy
 printf 'WATCHDOG_USE_DOPPLER=true\nDOPPLER_TOKEN=dp.st.fake\n' > "$ENVF"
 chmod 600 "$ENVF"
 env -i PATH="$DBIN:$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
     STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_DOPPLER_LOG="$DLOG" bash "$INSTALL" test > "$WORK/o.log" 2>&1
-check "channel only in the secrets manager: exit 0" "$?" 0
-check "channel only in the secrets manager: alert sent" "$(calls)" 1
-contains "sent to the channel the secrets manager supplied" "$CALLS" "webhooks/7/fromdoppler"
-lacks "the token never reaches an argument list" "$ARGV" "dp.st.fake"
-healthy
-# A PATH holding only what the script needs, so a real secrets manager binary
-# on this machine can never be found or run.
-NODOP="$WORK/nodop"
-mkdir -p "$NODOP"
-for t in bash id stat wc tr jq date cat sed head dirname; do ln -s "$(command -v "$t")" "$NODOP/$t"; done
-env -i PATH="$BIN:$NODOP" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
-    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_DOPPLER_LOG="$DLOG" bash "$INSTALL" test > "$WORK/o.log" 2>&1
-check "secrets manager enabled but missing: exit 1" "$?" 1
-contains "secrets manager missing: says so" "$WORK/o.log" "doppler is not installed"
+check "secrets-only settings: nothing to test here, exit 1" "$?" 1
+check "secrets-only settings: client still not invoked" "$(wc -c < "$DLOG" | tr -d ' ')" 0
+contains "secrets-only settings: note printed" "$WORK/o.log" "does not fetch secrets as root"
 rm -f "$ENVF" "$DLOG"
-rm -rf "$DBIN" "$NODOP"
+rm -rf "$DBIN"
+
+echo "a hostile ambient PATH cannot redirect the tools run as root"
+HBIN="$WORK/hostile-bin"
+HLOG="$WORK/hostile.log"
+mkdir -p "$HBIN" "$WORK/hlib"
+for t in systemctl head; do
+    printf '#!/bin/bash\necho "hostile %s" >> "%s"\nexit 0\n' "$t" "$HLOG" > "$HBIN/$t"
+    chmod +x "$HBIN/$t"
+done
+printf '#!/bin/bash\necho "PRINT ran"\n' > "$WORK/hlib/watchdog.sh"
+chmod +x "$WORK/hlib/watchdog.sh"
+: > "$HLOG"
+# As a stubbed root (no test switch): status must pin PATH before it runs anything.
+env -i PATH="$HBIN:/usr/bin:/bin" bash -c 'source "$1"; current_uid() { echo 0; }; ENV_FILE="$2"; LIB_DIR="$3"; cmd_status; echo "PATH=$PATH"' \
+    _ "$INSTALL" "$WORK/no-such.env" "$WORK/hlib" > "$WORK/o.log" 2>&1
+check "no tool from the hostile PATH ran" "$(wc -c < "$HLOG" | tr -d ' ')" 0
+contains "PATH was pinned to system directories" "$WORK/o.log" "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+rm -rf "$HBIN" "$HLOG" "$WORK/hlib"
 
 echo "the settings file must be root-owned and private"
 printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"

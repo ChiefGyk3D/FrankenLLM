@@ -31,11 +31,40 @@ testing_seam_ok() {
     [ "${WATCHDOG_TESTING:-}" = "1" ] && [ "$(current_uid)" -ne 0 ]
 }
 
+# Root-owned system directories only: a hostile ambient PATH must never pick
+# the curl, jq, python3 or install this script (or what it starts) runs as root.
+SAFE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Pins PATH to SAFE_PATH. The test seam (non-root only) keeps the caller's PATH
+# so stubs can stand in for real tools.
+set_safe_path() {
+    testing_seam_ok && return 0
+    PATH="$SAFE_PATH"
+    export PATH
+}
+
 need_root() {
     if [ "$(current_uid)" -ne 0 ]; then
         echo "Run this as root:  sudo $0 $1" >&2
         exit 1
     fi
+    set_safe_path
+}
+
+# check_settings_type FILE  a settings file that exists must be a regular file,
+# never a symbolic link (root would chmod or read whatever it points at). A
+# missing file passes; a dangling link does not.
+check_settings_type() {
+    local file="$1"
+    if [ -L "$file" ]; then
+        echo "Refusing to use $file: it is a symbolic link. Remove it and run install again." >&2
+        return 1
+    fi
+    if [ -e "$file" ] && [ ! -f "$file" ]; then
+        echo "Refusing to use $file: it is not a regular file." >&2
+        return 1
+    fi
+    return 0
 }
 
 # The packages whose versions must move together: kernel module, userland
@@ -68,6 +97,7 @@ cmd_install() {
         return 1
     fi
     command -v python3 > /dev/null || echo "Note: python3 not found, email alerts will not work."
+    check_settings_type "$ENV_FILE" || return 1
 
     step "create the directories" install -d -m 0755 -o root -g root "$LIB_DIR" "$(dirname "$ENV_FILE")" || return 1
     step "copy the watchdog scripts" install -m 0755 -o root -g root "$SCRIPT_DIR/watchdog.sh" "$SCRIPT_DIR/watchdog-notify.sh" "$SCRIPT_DIR/watchdog-env.sh" "$LIB_DIR/" || return 1
@@ -115,6 +145,7 @@ resolve_paths() {
 # access, since they could swap it or read it.
 check_settings_perms() {
     local file="$1" want_uid="$2" want_gid="$3" owner mode
+    check_settings_type "$file" || return 1
     owner="$(stat -c '%u:%g' -- "$file" 2> /dev/null)" || {
         echo "Cannot inspect $file." >&2
         return 1
@@ -134,6 +165,7 @@ check_settings_perms() {
 cmd_test() {
     if ! testing_seam_ok; then need_root test; fi
     resolve_paths
+    check_settings_type "$ENV_FILE" || exit 1
     [ -f "$ENV_FILE" ] || { echo "No $ENV_FILE yet. Run install first." >&2; exit 1; }
     check_settings_perms "$ENV_FILE" "$EXPECT_UID" "$EXPECT_GID" || exit 1
     (
@@ -142,20 +174,13 @@ cmd_test() {
         # shellcheck disable=SC1091  # installed copy, absent at lint time
         source "$LIB_DIR/watchdog-env.sh"
         wd_load_env "$ENV_FILE" || exit 1
-        # Same secrets bootstrap as the timer run (watchdog.sh): with
-        # WATCHDOG_USE_DOPPLER=true the channel settings come from Doppler and
-        # values Doppler supplies win over the file.
-        if [ "${WATCHDOG_USE_DOPPLER:-}" = "true" ] && [ -z "${WATCHDOG_IN_DOPPLER:-}" ]; then
-            if command -v doppler > /dev/null; then
-                export WATCHDOG_IN_DOPPLER=1
-                exec doppler run -- bash -c '
-                    source "$1/watchdog-env.sh"
-                    wd_load_env "$2" || exit 1
-                    source "$1/watchdog-notify.sh"
-                    notify_all recovery "[${WATCHDOG_LABEL:-FrankenLLM}] test alert" "If you can read this, this channel works."
-                ' _ "$LIB_DIR" "$ENV_FILE"
-            fi
-            echo "Note: WATCHDOG_USE_DOPPLER=true but doppler is not installed; using the settings file only." >&2
+        # The timer fetches secrets from the secrets manager as an unprivileged
+        # user. Doing that here would run its client, and whatever environment
+        # it supplies, as root, so this command never does.
+        if [ "${WATCHDOG_USE_DOPPLER:-}" = "true" ]; then
+            echo "Note: WATCHDOG_USE_DOPPLER=true. For safety this command does not fetch secrets as root; the timer does." >&2
+            echo "      Only channels set in $ENV_FILE are tested here. To test the secrets path run the unit once and read the journal:" >&2
+            echo "        sudo systemctl start frankenllm-watchdog.service && sudo journalctl -u frankenllm-watchdog.service -n 30" >&2
         fi
         # shellcheck disable=SC1091  # installed copy, absent at lint time
         source "$LIB_DIR/watchdog-notify.sh"
@@ -169,6 +194,7 @@ cmd_test() {
 }
 
 cmd_status() {
+    set_safe_path
     resolve_paths
     systemctl list-timers frankenllm-watchdog.timer --no-pager 2> /dev/null | head -n 3
     echo
@@ -176,7 +202,9 @@ cmd_status() {
         # Load the same settings the timer run loads (host, ports, label), as
         # data through the restricted reader. Unreadable or unsafe: say so and
         # fall back to the defaults.
-        if [ ! -r "$ENV_FILE" ]; then
+        if ! check_settings_type "$ENV_FILE"; then
+            echo "Note: showing the defaults." >&2
+        elif [ ! -r "$ENV_FILE" ]; then
             echo "Note: cannot read $ENV_FILE (run with sudo to use your settings); showing the defaults." >&2
         elif check_settings_perms "$ENV_FILE" "$EXPECT_UID" "$EXPECT_GID"; then
             # shellcheck disable=SC1091  # installed copy, absent at lint time
