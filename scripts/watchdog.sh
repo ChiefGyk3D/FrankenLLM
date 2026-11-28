@@ -232,6 +232,12 @@ for i in "${!PROB_KEYS[@]}"; do
     key="${PROB_KEYS[$i]}"
     msg="${PROB_MSGS[$i]}"
     echo "problem: $key: $msg"
+    # A recovery notice for this problem is only partly delivered (its state
+    # file was kept for the retry) and the problem is back: the recurrence is a
+    # NEW problem for every channel, so drop the stale state and its markers.
+    if [ -f "$STATE_DIR/$key" ] && compgen -G "$STATE_DIR/.sent/recovered-$key.*" > /dev/null; then
+        rm -f -- "$STATE_DIR/$key" "$STATE_DIR/.sent/recovered-$key".*
+    fi
     if [ ! -f "$STATE_DIR/$key" ]; then
         new_keys+=("$key|$msg")
         lines_new+="- ${msg}"$'\n'

@@ -631,6 +631,22 @@ check "recovery retry: discord not repeated" "$(calls)" 2
 check "recovery retry: email delivered" "$(email_count)" 3
 check "recovery retry: state cleared" "$(state_count)" 0
 
+echo "a problem that returns before a pending recovery notice is retried is announced as NEW"
+healthy
+skew
+run_wd $T0 "${EM[@]}" "$DISCORD"
+unskew
+STUB_EMAIL_FAIL=1 run_wd $((T0 + HOUR)) "${EM[@]}" "$DISCORD"
+check "recovery partial: exit 1, state kept" "$(rc)/$(state_keys)" "1/gpu-skew "
+check "recovery partial: discord told of the recovery" "$(calls)" 2
+skew
+run_wd $((T0 + HOUR + 300)) "${EM[@]}" "$DISCORD"
+check "recurrence: exit 0" "$(rc)" 0
+check "recurrence: every channel gets a problem alert (discord)" "$(calls)" 3
+check "recurrence: every channel gets a problem alert (email)" "$(email_count)" 3
+contains "recurrence: announced as NEW" "$CALLS" "NEW"
+check "recurrence: tracked again, no stale markers" "$(state_keys)/$(mark_count)" "gpu-skew /0"
+
 echo "a stale delivery marker does not suppress a later new problem"
 healthy
 skew
@@ -873,7 +889,40 @@ done
 root_env_run STUB_CLEAN=1
 check "clean environment: install proceeds" "$(test "$(grep -c . "$RLOG")" -gt 0 && echo ran || echo idle)" ran
 contains "clean environment: success" "$WORK/o.log" "Watchdog timer enabled."
+# Exported functions named like the detector's own builtins must not hide each
+# other, and a later command (stat) must never run their code.
+STATLOG="$WORK/hostile-stat.log"
+: > "$STATLOG"
+root_env_run 'BASH_FUNC_compgen%%=() { :; }' 'BASH_FUNC_declare%%=() { :; }' "BASH_FUNC_stat%%=() { echo ran >> $STATLOG; }"
+check "functions named compgen and declare: still refused" "$?" 1
+contains "functions named compgen and declare: the exported function is named" "$WORK/o.log" "BASH_FUNC_stat"
+check "a hostile stat function never ran" "$(wc -c < "$STATLOG" | tr -d ' ')" 0
+check "nothing was run" "$(wc -c < "$RLOG" | tr -d ' ')" 0
+rm -f "$STATLOG"
 rm -rf "$RBIN" "$RLOG" "$WORK/empty-env-file" "$WORK/inst-env" "$WORK/inst-lib" "$WORK/inst-units"
+
+echo "a sourced root shell never runs id before PATH is pinned"
+HBIN="$WORK/hostile-bin"
+HLOG="$WORK/hostile.log"
+mkdir -p "$HBIN"
+printf '#!/bin/sh\necho "hostile id" >> "%s"\nexec /usr/bin/id "$@"\n' "$HLOG" > "$HBIN/id"
+chmod +x "$HBIN/id"
+: > "$HLOG"
+# current_uid is NOT stubbed: the real lookup must not use a PATH program.
+env -i PATH="$HBIN:/usr/bin:/bin" bash -c 'source "$1"; cmd_status' _ "$INSTALL" > "$WORK/o.log" 2>&1
+check "hostile id never ran" "$(wc -c < "$HLOG" | tr -d ' ')" 0
+rm -rf "$HBIN" "$HLOG"
+
+echo "a real root test run ignores the notifier dry-run seam"
+healthy
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+chmod 600 "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_DRY_RUN=1 STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" \
+    bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; check_settings_dirs() { :; }; check_settings_perms() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; cmd_test' \
+    _ "$INSTALL" "$ENVF" "$SCRIPTS" > "$WORK/o.log" 2>&1
+check "root test with the dry-run switches set: delivered" "$(calls)" 1
+lacks "root test with the dry-run switches set: no dry-run text" "$WORK/o.log" "DRY RUN"
+rm -f "$ENVF"
 
 echo "every directory above the settings file must be root-owned and not writable by others"
 DT="$WORK/dtest"

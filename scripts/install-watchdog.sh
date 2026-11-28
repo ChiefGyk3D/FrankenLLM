@@ -21,35 +21,38 @@ set -u
 # the non-root test seam keeps the caller's PATH, so stubs can stand in. The
 # test is Bash-builtin only ($EUID, no id).
 SAFE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    if [ "$EUID" -eq 0 ] || [ "${WATCHDOG_TESTING:-}" != "1" ]; then
-        PATH="$SAFE_PATH"
-        export PATH
-    fi
+# [[ ]] and `builtin` throughout: an imported function named [ or export must
+# not stand in for the builtin. As root, pin PATH whether run or sourced; when
+# run as non-root, pin it unless the test seam is on.
+if [[ "$EUID" -eq 0 ]] || { [[ "${BASH_SOURCE[0]}" == "$0" ]] && [[ "${WATCHDOG_TESTING:-}" != "1" ]]; }; then
+    PATH="$SAFE_PATH"
+    builtin export PATH
 fi
 
 # refuse_unsafe_environment  as root, refuse to run when the environment can
 # change what Bash or the loader executes. Bash and ld.so act on these before
 # the first script line, so scrubbing them here would be too late: the sudo
-# policy must not pass them (see docs/WATCHDOG.md). This is a safety net.
+# policy is the real boundary (see docs/WATCHDOG.md). This check is only a
+# safety net, and it uses builtins explicitly so an imported function with a
+# builtin's name cannot hide the others.
 refuse_unsafe_environment() {
-    local name bad=""
-    for name in $(compgen -e); do
+    builtin local name fname bad=""
+    for name in $(builtin compgen -e); do
         case "$name" in
             BASH_ENV | ENV | SHELLOPTS | BASHOPTS | CDPATH | GLOBIGNORE | LD_* | BASH_FUNC_*) bad+=" $name" ;;
         esac
     done
     # exported functions (BASH_FUNC_name%% in the environment)
-    for name in $(declare -Fx 2> /dev/null | while read -r _ _ fname; do echo "BASH_FUNC_$fname"; done); do
-        bad+=" $name"
+    for fname in $(builtin declare -Fx 2> /dev/null | while builtin read -r _ _ fname; do builtin printf 'BASH_FUNC_%s\n' "$fname"; done); do
+        bad+=" $fname"
     done
-    if [ -n "$bad" ]; then
-        echo "Refusing to run as root: the environment carries${bad}." >&2
-        echo "That means the sudo policy is not resetting the environment (it needs env_reset and secure_path). Fix the sudo policy; this check is a safety net, not a substitute." >&2
-        exit 1
+    if [[ -n "$bad" ]]; then
+        builtin echo "Refusing to run as root: the environment carries${bad}." >&2
+        builtin echo "That means the sudo policy is not resetting the environment (it needs env_reset and secure_path). Fix the sudo policy; this check is a safety net, not a substitute." >&2
+        builtin exit 1
     fi
 }
-if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "$EUID" -eq 0 ]; then
+if [[ "${BASH_SOURCE[0]}" == "$0" ]] && [[ "$EUID" -eq 0 ]]; then
     refuse_unsafe_environment
 fi
 
@@ -63,7 +66,7 @@ ENV_FILE="/etc/frankenllm/watchdog.env"
 UNIT_DIR="/etc/systemd/system"
 
 # The effective uid; a function so the test suite can stub it.
-current_uid() { id -u; }
+current_uid() { builtin echo "$EUID"; }
 
 # The test seam (WATCHDOG_TESTING, WATCHDOG_ENV_FILE, WATCHDOG_INSTALLED_LIB) is
 # honored only for a NON-root user. As root this script is a privilege boundary
@@ -248,6 +251,12 @@ check_settings_perms() {
 cmd_test() {
     if ! testing_seam_ok; then need_root test; fi
     resolve_paths
+    # A real root run honors no test override: the notifier itself would
+    # otherwise print instead of sending (WATCHDOG_DRY_RUN) and report success.
+    if ! testing_seam_ok; then
+        unset WATCHDOG_TESTING WATCHDOG_DRY_RUN WATCHDOG_STATE_DIR WATCHDOG_PROC_NVIDIA_VERSION \
+            WATCHDOG_LIBDIR WATCHDOG_REBOOT_FILE WATCHDOG_NOW WATCHDOG_ENV_FILE WATCHDOG_INSTALLED_LIB WATCHDOG_IN_DOPPLER
+    fi
     check_settings_dirs "$ENV_FILE" "$EXPECT_UID" "$(testing_seam_ok && echo 1)" || exit 1
     check_settings_type "$ENV_FILE" || exit 1
     [ -f "$ENV_FILE" ] || { echo "No $ENV_FILE yet. Run install first." >&2; exit 1; }
