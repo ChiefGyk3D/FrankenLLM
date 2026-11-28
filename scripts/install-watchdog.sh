@@ -16,7 +16,48 @@
 
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# FIRST statements, before any command can be looked up: when this file is run
+# (not sourced by the tests), pin PATH to root-owned system directories. Only
+# the non-root test seam keeps the caller's PATH, so stubs can stand in. The
+# test is Bash-builtin only ($EUID, no id).
+SAFE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    if [ "$EUID" -eq 0 ] || [ "${WATCHDOG_TESTING:-}" != "1" ]; then
+        PATH="$SAFE_PATH"
+        export PATH
+    fi
+fi
+
+# refuse_unsafe_environment  as root, refuse to run when the environment can
+# change what Bash or the loader executes. Bash and ld.so act on these before
+# the first script line, so scrubbing them here would be too late: the sudo
+# policy must not pass them (see docs/WATCHDOG.md). This is a safety net.
+refuse_unsafe_environment() {
+    local name bad=""
+    for name in $(compgen -e); do
+        case "$name" in
+            BASH_ENV | ENV | SHELLOPTS | BASHOPTS | CDPATH | GLOBIGNORE | LD_* | BASH_FUNC_*) bad+=" $name" ;;
+        esac
+    done
+    # exported functions (BASH_FUNC_name%% in the environment)
+    for name in $(declare -Fx 2> /dev/null | while read -r _ _ fname; do echo "BASH_FUNC_$fname"; done); do
+        bad+=" $name"
+    done
+    if [ -n "$bad" ]; then
+        echo "Refusing to run as root: the environment carries${bad}." >&2
+        echo "That means the sudo policy is not resetting the environment (it needs env_reset and secure_path). Fix the sudo policy; this check is a safety net, not a substitute." >&2
+        exit 1
+    fi
+}
+if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "$EUID" -eq 0 ]; then
+    refuse_unsafe_environment
+fi
+
+# The directory of this script, with Bash builtins only (no dirname).
+_src_dir="${BASH_SOURCE[0]%/*}"
+[ "$_src_dir" != "${BASH_SOURCE[0]}" ] || _src_dir="."
+SCRIPT_DIR="$(cd "$_src_dir" && pwd)"
+unset _src_dir
 LIB_DIR="/usr/local/lib/frankenllm"
 ENV_FILE="/etc/frankenllm/watchdog.env"
 UNIT_DIR="/etc/systemd/system"
@@ -31,11 +72,7 @@ testing_seam_ok() {
     [ "${WATCHDOG_TESTING:-}" = "1" ] && [ "$(current_uid)" -ne 0 ]
 }
 
-# Root-owned system directories only: a hostile ambient PATH must never pick
-# the curl, jq, python3 or install this script (or what it starts) runs as root.
-SAFE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-# Pins PATH to SAFE_PATH. The test seam (non-root only) keeps the caller's PATH
+# Pins PATH (again, for the stubbed-root tests and each command) to SAFE_PATH. The test seam (non-root only) keeps the caller's PATH
 # so stubs can stand in for real tools.
 set_safe_path() {
     testing_seam_ok && return 0
@@ -48,7 +85,51 @@ need_root() {
         echo "Run this as root:  sudo $0 $1" >&2
         exit 1
     fi
+    refuse_unsafe_environment
     set_safe_path
+}
+
+# check_settings_dirs FILE UID [SEAM]  before the settings file is chowned,
+# chmodded or read, every directory on its path up to / must be a real
+# directory (not a symlink), owned by UID, and not group or other writable;
+# otherwise someone else could swap the file or a directory under root. Missing
+# components are skipped (install creates them). SEAM=1 (test seam only, where
+# "root" is the current user) also accepts root-owned system directories such
+# as /tmp without the mode rule.
+check_settings_dirs() {
+    local file="$1" want_uid="$2" seam="${3:-}" d owner mode
+    case "$file" in /*) ;; *)
+        echo "Refusing to use $file: the settings path must be absolute." >&2
+        return 1
+        ;;
+    esac
+    d="${file%/*}"
+    while [ -n "$d" ]; do
+        if [ -L "$d" ]; then
+            echo "Refusing to use $file: directory $d is a symbolic link." >&2
+            return 1
+        fi
+        if [ -e "$d" ]; then
+            if [ ! -d "$d" ]; then
+                echo "Refusing to use $file: $d is not a directory." >&2
+                return 1
+            fi
+            owner="$(stat -c '%u' -- "$d")" || return 1
+            mode="$(stat -c '%a' -- "$d")" || return 1
+            if ! { [ "$seam" = "1" ] && [ "$owner" = "0" ] && [ "$d" != "${file%/*}" ]; }; then
+                if [ "$owner" != "$want_uid" ]; then
+                    echo "Refusing to use $file: directory $d is not owned by root (owner uid $owner)." >&2
+                    return 1
+                fi
+                if [ $((8#$mode & 8#022)) -ne 0 ]; then
+                    echo "Refusing to use $file: directory $d is group or other writable (mode $mode)." >&2
+                    return 1
+                fi
+            fi
+        fi
+        d="${d%/*}"
+    done
+    return 0
 }
 
 # check_settings_type FILE  a settings file that exists must be a regular file,
@@ -97,9 +178,11 @@ cmd_install() {
         return 1
     fi
     command -v python3 > /dev/null || echo "Note: python3 not found, email alerts will not work."
+    check_settings_dirs "$ENV_FILE" 0 || return 1
     check_settings_type "$ENV_FILE" || return 1
 
-    step "create the directories" install -d -m 0755 -o root -g root "$LIB_DIR" "$(dirname "$ENV_FILE")" || return 1
+    step "create the directories" install -d -m 0755 -o root -g root "$LIB_DIR" "${ENV_FILE%/*}" || return 1
+    check_settings_dirs "$ENV_FILE" 0 || return 1
     step "copy the watchdog scripts" install -m 0755 -o root -g root "$SCRIPT_DIR/watchdog.sh" "$SCRIPT_DIR/watchdog-notify.sh" "$SCRIPT_DIR/watchdog-env.sh" "$LIB_DIR/" || return 1
     step "install the systemd units" install -m 0644 -o root -g root "$SCRIPT_DIR/frankenllm-watchdog.service" "$SCRIPT_DIR/frankenllm-watchdog.timer" "$UNIT_DIR/" || return 1
 
@@ -165,6 +248,7 @@ check_settings_perms() {
 cmd_test() {
     if ! testing_seam_ok; then need_root test; fi
     resolve_paths
+    check_settings_dirs "$ENV_FILE" "$EXPECT_UID" "$(testing_seam_ok && echo 1)" || exit 1
     check_settings_type "$ENV_FILE" || exit 1
     [ -f "$ENV_FILE" ] || { echo "No $ENV_FILE yet. Run install first." >&2; exit 1; }
     check_settings_perms "$ENV_FILE" "$EXPECT_UID" "$EXPECT_GID" || exit 1
@@ -194,6 +278,7 @@ cmd_test() {
 }
 
 cmd_status() {
+    [ "$(current_uid)" -ne 0 ] || refuse_unsafe_environment
     set_safe_path
     resolve_paths
     systemctl list-timers frankenllm-watchdog.timer --no-pager 2> /dev/null | head -n 3
@@ -202,7 +287,9 @@ cmd_status() {
         # Load the same settings the timer run loads (host, ports, label), as
         # data through the restricted reader. Unreadable or unsafe: say so and
         # fall back to the defaults.
-        if ! check_settings_type "$ENV_FILE"; then
+        if ! check_settings_dirs "$ENV_FILE" "$EXPECT_UID" "$(testing_seam_ok && echo 1)"; then
+            echo "Note: showing the defaults." >&2
+        elif ! check_settings_type "$ENV_FILE"; then
             echo "Note: showing the defaults." >&2
         elif [ ! -r "$ENV_FILE" ]; then
             echo "Note: cannot read $ENV_FILE (run with sudo to use your settings); showing the defaults." >&2

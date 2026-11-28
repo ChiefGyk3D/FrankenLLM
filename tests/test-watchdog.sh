@@ -684,6 +684,7 @@ echo "the installer stops at the first failed step"
 IBIN="$WORK/ibin"
 ILOG="$WORK/install-steps.log"
 mkdir -p "$IBIN" "$WORK/inst-lib" "$WORK/inst-units" "$WORK/inst-etc"
+chmod 755 "$WORK/inst-etc" # the umask may leave it group-writable, which is refused
 for tool in install chown systemctl; do
     cat > "$IBIN/$tool" << 'STUB'
 #!/bin/bash
@@ -696,7 +697,7 @@ done
 run_install() { # run_install FAIL_ON  -> cmd_install as a stubbed root, rc in o.log
     : > "$ILOG"
     env -i PATH="$IBIN:$BIN:/usr/bin:/bin" STUB_STEPS="$ILOG" STUB_FAIL_ON="$1" \
-        bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install; echo "rc=$?"' \
+        bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; check_settings_dirs() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install; echo "rc=$?"' \
         _ "$INSTALL" "$WORK/inst-etc/watchdog.env" "$WORK/inst-lib" "$WORK/inst-units" > "$WORK/o.log" 2>&1
 }
 printf 'WATCHDOG_LABEL=x\n' > "$WORK/inst-etc/watchdog.env"
@@ -833,6 +834,91 @@ env -i PATH="$HBIN:/usr/bin:/bin" bash -c 'source "$1"; current_uid() { echo 0; 
 check "no tool from the hostile PATH ran" "$(wc -c < "$HLOG" | tr -d ' ')" 0
 contains "PATH was pinned to system directories" "$WORK/o.log" "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 rm -rf "$HBIN" "$HLOG" "$WORK/hlib"
+
+echo "the script never runs a PATH tool before it pins PATH"
+HBIN="$WORK/hostile-bin"
+HLOG="$WORK/hostile.log"
+mkdir -p "$HBIN"
+# A dirname that records itself and then behaves, so only the log shows the run.
+printf '#!/bin/sh\necho "hostile dirname" >> "%s"\nexec /usr/bin/dirname "$@"\n' "$HLOG" > "$HBIN/dirname"
+chmod +x "$HBIN/dirname"
+: > "$HLOG"
+# Run as a script (not sourced), hostile directory first in PATH.
+env -i PATH="$HBIN:/usr/bin:/bin" bash "$INSTALL" status > "$WORK/o.log" 2>&1
+check "hostile dirname never ran" "$(wc -c < "$HLOG" | tr -d ' ')" 0
+rm -rf "$HBIN" "$HLOG"
+
+echo "as root, a dangerous environment is refused before anything runs"
+RBIN="$WORK/rbin"
+RLOG="$WORK/root-steps.log"
+mkdir -p "$RBIN"
+for tool in install chown systemctl; do
+    printf '#!/bin/bash\necho "%s $*" >> "%s"\nexit 0\n' "$tool" "$RLOG" > "$RBIN/$tool"
+    chmod +x "$RBIN/$tool"
+done
+: > "$WORK/empty-env-file"
+root_env_run() { # root_env_run VAR=value...  -> cmd_install as a stubbed root
+    : > "$RLOG"
+    env -i PATH="$RBIN:$BIN:/usr/bin:/bin" "$@" \
+        bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; check_settings_dirs() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install' \
+        _ "$INSTALL" "$WORK/inst-env/watchdog.env" "$WORK/inst-lib" "$WORK/inst-units" > "$WORK/o.log" 2>&1
+}
+mkdir -p "$WORK/inst-env"
+for assign in "BASH_ENV=$WORK/empty-env-file" "ENV=$WORK/empty-env-file" "SHELLOPTS=braceexpand" "BASHOPTS=cmdhist" "CDPATH=/" "GLOBIGNORE=x" "LD_LIBRARY_PATH=/nonexistent" "LD_PRELOAD=" 'BASH_FUNC_evil%%=() { :; }'; do
+    root_env_run "$assign"
+    check "[${assign%%=*}] set: refused" "$?" 1
+    contains "[${assign%%=*}] set: says why" "$WORK/o.log" "sudo policy is not resetting the environment"
+    check "[${assign%%=*}] set: nothing was run" "$(wc -c < "$RLOG" | tr -d ' ')" 0
+done
+root_env_run STUB_CLEAN=1
+check "clean environment: install proceeds" "$(test "$(grep -c . "$RLOG")" -gt 0 && echo ran || echo idle)" ran
+contains "clean environment: success" "$WORK/o.log" "Watchdog timer enabled."
+rm -rf "$RBIN" "$RLOG" "$WORK/empty-env-file" "$WORK/inst-env" "$WORK/inst-lib" "$WORK/inst-units"
+
+echo "every directory above the settings file must be root-owned and not writable by others"
+DT="$WORK/dtest"
+rm -rf "$DT"
+mkdir -p "$DT/a/b"
+chmod 755 "$DT" "$DT/a" "$DT/a/b"
+dirs_check() { # dirs_check FILE UID [SEAM]
+    env -i PATH="$BIN:/usr/bin:/bin" bash -c 'source "$1"; check_settings_dirs "$2" "$3" "$4"; echo "rc=$?"' _ "$INSTALL" "$1" "$2" "${3:-}" 2>&1
+}
+UID_NOW="$(id -u)"
+out="$(dirs_check "$DT/a/b/watchdog.env" "$UID_NOW" 1)"
+check "private parents: accepted (test seam)" "${out##*rc=}" 0
+chmod 775 "$DT/a"
+out="$(dirs_check "$DT/a/b/watchdog.env" "$UID_NOW" 1)"
+check "group-writable parent: refused" "${out##*rc=}" 1
+case "$out" in *"$DT/a is group or other writable"*) PASS=$((PASS + 1)); echo "  ok   group-writable parent: names the directory" ;; *) FAIL=$((FAIL + 1)); echo "  FAIL group-writable parent: names the directory: [$out]" ;; esac
+chmod 757 "$DT/a"
+out="$(dirs_check "$DT/a/b/watchdog.env" "$UID_NOW" 1)"
+check "other-writable parent: refused" "${out##*rc=}" 1
+chmod 755 "$DT/a"
+if [ "$UID_NOW" -ne 0 ]; then
+    out="$(dirs_check "$DT/a/b/watchdog.env" 0 1)"
+    check "parent owned by someone else: refused" "${out##*rc=}" 1
+    out="$(dirs_check "$DT/a/b/watchdog.env" "$UID_NOW")"
+    check "root-only rule (no test seam): a non-root tree is refused" "${out##*rc=}" 1
+fi
+ln -s "$DT/a" "$DT/link"
+out="$(dirs_check "$DT/link/b/watchdog.env" "$UID_NOW" 1)"
+check "symlinked directory component: refused" "${out##*rc=}" 1
+case "$out" in *"symbolic link"*) PASS=$((PASS + 1)); echo "  ok   symlinked component: says so" ;; *) FAIL=$((FAIL + 1)); echo "  FAIL symlinked component: says so: [$out]" ;; esac
+out="$(dirs_check "relative/watchdog.env" "$UID_NOW" 1)"
+check "relative path: refused" "${out##*rc=}" 1
+# wired in: the installer stops before touching anything when the parent is unsafe
+mkdir -p "$WORK/ibin2"
+for tool in install chown systemctl; do
+    printf '#!/bin/bash\necho "%s $*" >> "%s"\nexit 0\n' "$tool" "$WORK/ibin2.log" > "$WORK/ibin2/$tool"
+    chmod +x "$WORK/ibin2/$tool"
+done
+: > "$WORK/ibin2.log"
+env -i PATH="$WORK/ibin2:$BIN:/usr/bin:/bin" bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install; echo "rc=$?"' \
+    _ "$INSTALL" "$DT/a/b/watchdog.env" "$WORK/inst-lib" "$WORK/inst-units" > "$WORK/o.log" 2>&1
+lacks "install with an unsafe parent: no success" "$WORK/o.log" "Watchdog timer enabled."
+lacks "install with an unsafe parent: rc is not 0" "$WORK/o.log" "rc=0"
+check "install with an unsafe parent: nothing was run" "$(wc -c < "$WORK/ibin2.log" | tr -d ' ')" 0
+rm -rf "$DT" "$WORK/ibin2" "$WORK/ibin2.log"
 
 echo "the settings file must be root-owned and private"
 printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"

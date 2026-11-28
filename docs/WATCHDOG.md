@@ -78,6 +78,12 @@ sudo scripts/install-watchdog.sh status    # timer state and the checks right no
 
 `install` stops at the first step that fails, names it, and prints the success line only when every step worked. It also sets an existing settings file to owner `root:root`, mode `0600`. `test` refuses a settings file that is not owned by root or that group or others can access. `status` loads the same settings file as the timer run, so a custom host, ports or label show up in what it prints.
 
+### The sudo policy the installer expects
+
+The installer runs as root, and Bash and the dynamic loader act on `BASH_ENV`, exported functions and `LD_*` before the first script line, so the script cannot undo them. The boundary is the sudo policy: use the default `env_reset` with a `secure_path`, and never a policy that preserves `PATH` or those variables (`env_keep`, `SETENV`, `--preserve-env`). The script pins its own `PATH` to system directories as its first statement, uses no external program before that, and as root refuses to run (nonzero exit, nothing executed) when the environment carries `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, `GLOBIGNORE`, any `LD_*` variable or any exported function. The refusal means the sudo policy is not resetting the environment. It is a safety net, not a substitute for fixing the policy.
+
+Before it chowns, chmods or reads the settings file, the installer also requires every directory above it to be a real directory (not a symlink), owned by root and not group or other writable, and names the unsafe one otherwise.
+
 Delivery is tracked per channel. If one channel fails, the next run retries only that channel; a channel that already delivered is not sent the same alert again. A problem counts as notified, and its reminder clock starts, only when every configured channel has delivered. (The test alert still counts as delivered when at least one channel gets it.)
 
 ### Secrets from Doppler
