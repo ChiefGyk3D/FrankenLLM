@@ -277,7 +277,8 @@ healthy
 : > "$WORK/lib/libnvidia-ml.so.595.99.03"
 rm "$WORK/lib/libnvidia-ml.so.595.99.02"
 STUB_EMAIL_FAIL=1 run_wd $T0 SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test "$DISCORD"
-check "delivered via discord, exit 0" "$(rc)" 0
+check "one channel failed: not recorded as notified, exit 1" "$(rc)" 1
+check "delivered via discord meanwhile" "$(calls)" 1
 contains "failure reported" "$WORK/out.log" "email delivery failed"
 
 echo "--print is read-only"
@@ -359,16 +360,19 @@ rm -f "$ENVF"
 echo "install-watchdog.sh test never executes the env file"
 healthy
 printf 'DISCORD_WEBHOOK_URL=$(touch "%s")\n' "$MARK" > "$ENVF"
+chmod 600 "$ENVF"
 env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
     STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
 check "hostile file: exit 1" "$?" 1
 nomark "hostile value is not executed as root would have"
 printf 'touch "%s"\n' "$MARK" > "$ENVF"
+chmod 600 "$ENVF"
 env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
     STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
 check "bare command line: exit 1" "$?" 1
 nomark "bare command line is not executed"
 printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+chmod 600 "$ENVF"
 env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
     STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
 check "good file: exit 0" "$?" 0
@@ -582,6 +586,202 @@ if [ "$(id -u)" -ne 0 ]; then
     contains "variables without the switch: says to run as root" "$WORK/o.log" "Run this as root"
 fi
 rm -rf "$WORK/decoy" "$ENVF"
+
+# =============================================================================
+# Polish round: per-channel retry, installer fail-fast, status and test use the
+# real settings, settings file ownership.
+# =============================================================================
+EM=(SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test)
+mark_count() { find "$WORK/state/.sent" -maxdepth 1 -type f 2> /dev/null | wc -l | tr -d ' '; }
+email_count() { wc -l < "$EMAILS" | tr -d ' '; }
+unskew() { # fix the skew without wiping state
+    rm -f "$WORK/lib"/libnvidia-ml.so.595.99.03
+    : > "$WORK/lib/libnvidia-ml.so.595.99.02"
+}
+
+echo "a failed channel is retried, a delivered one is not re-sent"
+healthy
+skew
+STUB_EMAIL_FAIL=1 run_wd $T0 "${EM[@]}" "$DISCORD"
+check "partial: exit 1" "$(rc)" 1
+check "partial: not recorded as notified" "$(state_count)" 0
+check "partial: discord got it once" "$(calls)" 1
+check "partial: email tried once" "$(email_count)" 1
+run_wd $((T0 + 300)) "${EM[@]}" "$DISCORD"
+check "retry: exit 0" "$(rc)" 0
+check "retry: discord is not sent a second time" "$(calls)" 1
+check "retry: email delivered" "$(email_count)" 2
+check "retry: now recorded as notified" "$(state_keys)" "gpu-skew "
+check "retry: markers cleared" "$(mark_count)" 0
+run_wd $((T0 + 25 * HOUR)) "${EM[@]}" "$DISCORD"
+check "reminder goes to every channel again" "$(calls)" 2
+
+echo "a failed recovery notice is retried on the failed channel only"
+healthy
+skew
+run_wd $T0 "${EM[@]}" "$DISCORD"
+check "problem notified everywhere" "$(calls)/$(email_count)" "1/1"
+unskew
+STUB_EMAIL_FAIL=1 run_wd $((T0 + HOUR)) "${EM[@]}" "$DISCORD"
+check "recovery partial: exit 1" "$(rc)" 1
+check "recovery partial: state kept" "$(state_keys)" "gpu-skew "
+run_wd $((T0 + HOUR + 300)) "${EM[@]}" "$DISCORD"
+check "recovery retry: exit 0" "$(rc)" 0
+check "recovery retry: discord not repeated" "$(calls)" 2
+check "recovery retry: email delivered" "$(email_count)" 3
+check "recovery retry: state cleared" "$(state_count)" 0
+
+echo "a stale delivery marker does not suppress a later new problem"
+healthy
+skew
+STUB_EMAIL_FAIL=1 run_wd $T0 "${EM[@]}" "$DISCORD"
+check "marker left after a partial send" "$(mark_count)" 1
+unskew
+run_wd $((T0 + 300)) "${EM[@]}" "$DISCORD"
+check "problem cleared before the retry: quiet" "$(rc)" 0
+check "problem cleared before the retry: no state" "$(state_count)" 0
+check "problem cleared before the retry: marker pruned" "$(mark_count)" 0
+skew
+run_wd $((T0 + 600)) "${EM[@]}" "$DISCORD"
+check "the problem returns: discord is told again" "$(calls)" 2
+
+echo "install-watchdog.sh test still succeeds when one channel delivers"
+healthy
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\nSMTP_HOST=smtp.test\nSMTP_FROM=a@test\nEMAIL_TO=b@test\n' > "$ENVF"
+chmod 600 "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_EMAILS="$EMAILS" STUB_EMAIL_FAIL=1 bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "test alert: one channel is enough, exit 0" "$?" 0
+rm -f "$ENVF"
+
+echo "the installer stops at the first failed step"
+IBIN="$WORK/ibin"
+ILOG="$WORK/install-steps.log"
+mkdir -p "$IBIN" "$WORK/inst-lib" "$WORK/inst-units" "$WORK/inst-etc"
+for tool in install chown systemctl; do
+    cat > "$IBIN/$tool" << 'STUB'
+#!/bin/bash
+echo "$(basename "$0") $*" >> "$STUB_STEPS"
+case "$*" in *"${STUB_FAIL_ON:-@@none@@}"*) exit 1 ;; esac
+exit 0
+STUB
+    chmod +x "$IBIN/$tool"
+done
+run_install() { # run_install FAIL_ON  -> cmd_install as a stubbed root, rc in o.log
+    : > "$ILOG"
+    env -i PATH="$IBIN:$BIN:/usr/bin:/bin" STUB_STEPS="$ILOG" STUB_FAIL_ON="$1" \
+        bash -c 'source "$1"; current_uid() { echo 0; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install; echo "rc=$?"' \
+        _ "$INSTALL" "$WORK/inst-etc/watchdog.env" "$WORK/inst-lib" "$WORK/inst-units" > "$WORK/o.log" 2>&1
+}
+printf 'WATCHDOG_LABEL=x\n' > "$WORK/inst-etc/watchdog.env"
+chmod 644 "$WORK/inst-etc/watchdog.env"
+run_install "@@none@@"
+contains "all steps ok: success message" "$WORK/o.log" "Watchdog timer enabled."
+contains "all steps ok: rc 0" "$WORK/o.log" "rc=0"
+contains "existing settings file: owner set to root:root" "$ILOG" "chown root:root $WORK/inst-etc/watchdog.env"
+check "existing settings file: mode 0600" "$(stat -c %a "$WORK/inst-etc/watchdog.env")" 600
+for failing in "watchdog-notify.sh" "frankenllm-watchdog.timer" "root:root" "daemon-reload" "enable --now"; do
+    printf 'WATCHDOG_LABEL=x\n' > "$WORK/inst-etc/watchdog.env"
+    run_install "$failing"
+    lacks "step [$failing] failed: no success message" "$WORK/o.log" "Watchdog timer enabled."
+    lacks "step [$failing] failed: rc is not 0" "$WORK/o.log" "rc=0"
+    contains "step [$failing] failed: says which step" "$WORK/o.log" "Install failed at:"
+done
+run_install "watchdog-notify.sh"
+lacks "after a failed copy nothing is enabled" "$ILOG" "systemctl"
+rm -f "$WORK/inst-etc/watchdog.env"
+rm -rf "$IBIN" "$ILOG" "$WORK/inst-lib" "$WORK/inst-units" "$WORK/inst-etc"
+
+echo "status loads the same settings the timer run loads"
+SLIB="$WORK/status-lib"
+mkdir -p "$SLIB" "$WORK/sbin"
+cp "$SCRIPTS/watchdog-env.sh" "$SLIB/"
+cat > "$SLIB/watchdog.sh" << 'STUB'
+#!/bin/bash
+echo "PRINT label=[${WATCHDOG_LABEL:-}] ports=[${WATCHDOG_PORTS:-}] doppler=[${WATCHDOG_USE_DOPPLER:-}]"
+STUB
+chmod +x "$SLIB/watchdog.sh"
+printf '#!/bin/bash\nexit 0\n' > "$WORK/sbin/systemctl"
+chmod +x "$WORK/sbin/systemctl"
+status_run() {
+    env -i PATH="$WORK/sbin:$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SLIB" \
+        bash "$INSTALL" status > "$WORK/o.log" 2>&1
+}
+printf 'WATCHDOG_LABEL=CustomBox\nWATCHDOG_PORTS=11500 11501\nWATCHDOG_USE_DOPPLER=true\n' > "$ENVF"
+chmod 600 "$ENVF"
+status_run
+contains "status shows the custom label" "$WORK/o.log" "label=[CustomBox]"
+contains "status shows the custom ports" "$WORK/o.log" "ports=[11500 11501]"
+contains "status never starts the secrets manager" "$WORK/o.log" "doppler=[]"
+printf 'WATCHDOG_LABEL=$(touch "%s")\n' "$MARK" > "$ENVF"
+printf 'touch "%s"\n' "$MARK" >> "$ENVF"
+chmod 600 "$ENVF"
+status_run
+nomark "status does not execute the settings file"
+contains "status says a bad settings file was rejected" "$WORK/o.log" "rejected"
+printf 'WATCHDOG_LABEL=CustomBox\n' > "$ENVF"
+chmod 644 "$ENVF"
+status_run
+lacks "status ignores a world-readable settings file" "$WORK/o.log" "label=[CustomBox]"
+contains "status says why" "$WORK/o.log" "group or others can access it"
+rm -f "$ENVF"
+rm -rf "$SLIB" "$WORK/sbin"
+
+echo "test uses the same secrets bootstrap as the timer run"
+DBIN="$WORK/dbin"
+DLOG="$WORK/doppler.log"
+mkdir -p "$DBIN"
+cat > "$DBIN/doppler" << 'STUB'
+#!/bin/bash
+echo "doppler $*" >> "$STUB_DOPPLER_LOG"
+[ "$1" = run ] && [ "$2" = -- ] || exit 3
+shift 2
+DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/7/fromdoppler exec "$@"
+STUB
+chmod +x "$DBIN/doppler"
+: > "$DLOG"
+healthy
+printf 'WATCHDOG_USE_DOPPLER=true\nDOPPLER_TOKEN=dp.st.fake\n' > "$ENVF"
+chmod 600 "$ENVF"
+env -i PATH="$DBIN:$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_DOPPLER_LOG="$DLOG" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "channel only in the secrets manager: exit 0" "$?" 0
+check "channel only in the secrets manager: alert sent" "$(calls)" 1
+contains "sent to the channel the secrets manager supplied" "$CALLS" "webhooks/7/fromdoppler"
+lacks "the token never reaches an argument list" "$ARGV" "dp.st.fake"
+healthy
+# A PATH holding only what the script needs, so a real secrets manager binary
+# on this machine can never be found or run.
+NODOP="$WORK/nodop"
+mkdir -p "$NODOP"
+for t in bash id stat wc tr jq date cat sed head dirname; do ln -s "$(command -v "$t")" "$NODOP/$t"; done
+env -i PATH="$BIN:$NODOP" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_DOPPLER_LOG="$DLOG" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "secrets manager enabled but missing: exit 1" "$?" 1
+contains "secrets manager missing: says so" "$WORK/o.log" "doppler is not installed"
+rm -f "$ENVF" "$DLOG"
+rm -rf "$DBIN" "$NODOP"
+
+echo "the settings file must be root-owned and private"
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+for m in 640 644 604 660; do
+    healthy
+    chmod "$m" "$ENVF"
+    env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+        STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+    check "mode $m refused" "$?" 1
+    check "mode $m: nothing sent" "$(calls)" 0
+    contains "mode $m: message" "$WORK/o.log" "group or others can access it"
+done
+chmod 600 "$ENVF"
+perm_check() { # perm_check UID GID -> rc of check_settings_perms on $ENVF
+    env -i PATH="$BIN:/usr/bin:/bin" bash -c 'source "$1"; check_settings_perms "$2" "$3" "$4" 2> /dev/null; echo "rc=$?"' _ "$INSTALL" "$ENVF" "$1" "$2" 2>&1
+}
+check "owner and mode right: accepted" "$(perm_check "$(id -u)" "$(id -g)")" "rc=0"
+if [ "$(id -u)" -ne 0 ]; then
+    check "not owned by root: refused" "$(perm_check 0 0)" "rc=1"
+fi
+rm -f "$ENVF"
 
 echo "the unit file carries the hardening"
 UNIT="$REPO/scripts/frankenllm-watchdog.service"

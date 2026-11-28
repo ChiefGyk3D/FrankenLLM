@@ -76,9 +76,13 @@ sudo scripts/install-watchdog.sh test      # sends a test alert through every ch
 sudo scripts/install-watchdog.sh status    # timer state and the checks right now
 ```
 
+`install` stops at the first step that fails, names it, and prints the success line only when every step worked. It also sets an existing settings file to owner `root:root`, mode `0600`. `test` refuses a settings file that is not owned by root or that group or others can access. `status` loads the same settings file as the timer run, so a custom host, ports or label show up in what it prints.
+
+Delivery is tracked per channel. If one channel fails, the next run retries only that channel; a channel that already delivered is not sent the same alert again. A problem counts as notified, and its reminder clock starts, only when every configured channel has delivered. (The test alert still counts as delivered when at least one channel gets it.)
+
 ### Secrets from Doppler
 
-Keep the channel values in a Doppler config instead of the env file: put only `DOPPLER_TOKEN` and `WATCHDOG_USE_DOPPLER=true` in `/etc/frankenllm/watchdog.env`, and the watchdog re-runs itself under `doppler run --`.
+Keep the channel values in a Doppler config instead of the env file: put only `DOPPLER_TOKEN` and `WATCHDOG_USE_DOPPLER=true` in `/etc/frankenllm/watchdog.env`, and the watchdog re-runs itself under `doppler run --`. `install-watchdog.sh test` takes the same route, so a channel that exists only in Doppler is tested too; `status` never starts Doppler.
 
 ### Stop the driver drifting again
 
