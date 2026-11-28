@@ -18,9 +18,15 @@
 # can reach a curl config or a mail header.
 #
 # Secrets reach curl through a config file descriptor, never argv, so they do
-# not show up in `ps`. notify_all returns 0 when at least one channel
-# delivered, 1 when channels are configured but none delivered, 2 when no
-# channel is configured at all.
+# not show up in `ps`. notify_all LEVEL TITLE BODY returns 0 when at least one
+# channel delivered, 1 when channels are configured but none delivered, 2 when
+# no channel is configured at all.
+#
+# With a fourth argument, notify_all LEVEL TITLE BODY MARKER_DIR KEY..., it
+# tracks delivery per channel: a channel that delivered leaves a marker
+# MARKER_DIR/KEY.CHANNEL for each KEY and is skipped on the retry, and the call
+# returns 0 only when EVERY configured channel has delivered. The caller
+# removes the markers once it has recorded the problem as notified.
 
 # _clean VALUE...  succeeds only when no value has a control character
 # (CR, LF, tab, escape, DEL). NUL cannot live in a Bash variable at all.
@@ -157,7 +163,11 @@ with server:
 }
 
 notify_all() {
-    local level="$1" title="$2" body="$3" configured=0 delivered=0
+    local level="$1" title="$2" body="$3" configured=0 delivered=0 failed=0 ch
+    # Optional per-channel tracking: notify_all LEVEL TITLE BODY MARKER_DIR KEY...
+    # A channel that delivered gets a marker per KEY; on a retry it is skipped.
+    _MARK_DIR="${4:-}"
+    _MARK_KEYS=("${@:5}")
 
     # Test-only: print instead of sending. Needs the explicit testing switch.
     if [ "${WATCHDOG_TESTING:-}" = "1" ] && [ "${WATCHDOG_DRY_RUN:-}" = "1" ]; then
@@ -165,26 +175,65 @@ notify_all() {
         return 0
     fi
 
-    if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
+    for ch in discord ntfy matrix email; do
+        _channel_on "$ch" || continue
         configured=1
-        if notify_discord "$level" "$title" "$body"; then delivered=1; else echo "notify: Discord delivery failed" >&2; fi
-    fi
-    if [ -n "${NTFY_URL:-}" ]; then
-        configured=1
-        if notify_ntfy "$level" "$title" "$body"; then delivered=1; else echo "notify: ntfy delivery failed" >&2; fi
-    fi
-    if [ -n "${MATRIX_HOMESERVER:-}" ] && [ -n "${MATRIX_ACCESS_TOKEN:-}" ] && [ -n "${MATRIX_ROOM_ID:-}" ]; then
-        configured=1
-        if notify_matrix "$level" "$title" "$body"; then delivered=1; else echo "notify: Matrix delivery failed" >&2; fi
-    fi
-    if [ -n "${SMTP_HOST:-}" ] && [ -n "${SMTP_FROM:-}" ] && [ -n "${EMAIL_TO:-}" ]; then
-        configured=1
-        if notify_email "$level" "$title" "$body"; then delivered=1; else echo "notify: email delivery failed" >&2; fi
-    fi
+        if _marked "$ch"; then
+            delivered=1
+        elif "notify_$ch" "$level" "$title" "$body"; then
+            delivered=1
+            if ! _mark "$ch"; then
+                # Delivered but not recorded: it would be re-sent every run, so
+                # a tracked delivery counts as failed. No path or secret here.
+                failed=1
+                echo "notify: $ch delivered but the delivery marker could not be written" >&2
+            fi
+        else
+            failed=1
+            echo "notify: $ch delivery failed" >&2
+        fi
+    done
 
     if [ "$configured" -eq 0 ]; then
         echo "notify: no channel configured, alert was not delivered" >&2
         return 2
     fi
-    [ "$delivered" -eq 1 ]
+    # With tracking, every channel must have delivered; without it (the test
+    # alert) one is enough.
+    if [ -n "$_MARK_DIR" ] && [ "${#_MARK_KEYS[@]}" -gt 0 ]; then
+        [ "$failed" -eq 0 ]
+    else
+        [ "$delivered" -eq 1 ]
+    fi
+}
+
+# _channel_on NAME  succeeds when that channel's settings are present
+_channel_on() {
+    case "$1" in
+        discord) [ -n "${DISCORD_WEBHOOK_URL:-}" ] ;;
+        ntfy) [ -n "${NTFY_URL:-}" ] ;;
+        matrix) [ -n "${MATRIX_HOMESERVER:-}" ] && [ -n "${MATRIX_ACCESS_TOKEN:-}" ] && [ -n "${MATRIX_ROOM_ID:-}" ] ;;
+        email) [ -n "${SMTP_HOST:-}" ] && [ -n "${SMTP_FROM:-}" ] && [ -n "${EMAIL_TO:-}" ] ;;
+    esac
+}
+
+# _marked CHANNEL  succeeds when CHANNEL already delivered every tracked key
+_marked() {
+    local k
+    [ -n "$_MARK_DIR" ] && [ "${#_MARK_KEYS[@]}" -gt 0 ] || return 1
+    for k in "${_MARK_KEYS[@]}"; do
+        [ -f "$_MARK_DIR/$k.$1" ] && [ ! -L "$_MARK_DIR/$k.$1" ] || return 1
+    done
+    return 0
+}
+
+_mark() {
+    local k
+    [ -n "$_MARK_DIR" ] && [ "${#_MARK_KEYS[@]}" -gt 0 ] || return 0
+    mkdir -p "$_MARK_DIR" 2> /dev/null || return 1
+    for k in "${_MARK_KEYS[@]}"; do
+        [ ! -L "$_MARK_DIR/$k.$1" ] || return 1
+        : > "$_MARK_DIR/$k.$1" 2> /dev/null || return 1
+    done
+    return 0
 }

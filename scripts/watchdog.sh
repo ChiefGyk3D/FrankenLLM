@@ -232,6 +232,12 @@ for i in "${!PROB_KEYS[@]}"; do
     key="${PROB_KEYS[$i]}"
     msg="${PROB_MSGS[$i]}"
     echo "problem: $key: $msg"
+    # A recovery notice for this problem is only partly delivered (its state
+    # file was kept for the retry) and the problem is back: the recurrence is a
+    # NEW problem for every channel, so drop the stale state and its markers.
+    if [ -f "$STATE_DIR/$key" ] && compgen -G "$STATE_DIR/.sent/recovered-$key.*" > /dev/null; then
+        rm -f -- "$STATE_DIR/$key" "$STATE_DIR/.sent/recovered-$key".*
+    fi
     if [ ! -f "$STATE_DIR/$key" ]; then
         new_keys+=("$key|$msg")
         lines_new+="- ${msg}"$'\n'
@@ -264,6 +270,27 @@ for f in "$STATE_DIR"/*; do
     fi
 done
 
+# Delivery is tracked per channel: a channel that already got this message
+# (marker per key and channel) is not sent it again on the retry, and the
+# problem counts as notified only when every configured channel delivered.
+MARK_DIR="$STATE_DIR/.sent"
+send_keys=()
+for entry in "${new_keys[@]}" "${remind_keys[@]}"; do
+    IFS='|' read -r key _ <<< "$entry"
+    send_keys+=("$key")
+done
+for key in "${recovered_keys[@]}"; do send_keys+=("recovered-$key"); done
+# Markers that belong to nothing in this run's message are stale (the problem
+# went away before the retry): drop them, even when there is nothing to send.
+for m in "$MARK_DIR"/*; do
+    [ -f "$m" ] || continue
+    mk=$(basename "$m")
+    mk="${mk%.*}"
+    keep=0
+    for k in "${send_keys[@]}"; do [ "$k" = "$mk" ] && keep=1; done
+    [ "$keep" -eq 1 ] || rm -f -- "$m"
+done
+
 if [ -z "$lines_new$lines_remind$lines_recovered" ]; then
     [ "${#PROB_KEYS[@]}" -eq 0 ] && echo "[$LABEL] all checks passed"
     exit 0
@@ -282,10 +309,11 @@ else
     title="[$LABEL] recovered"
 fi
 
-if ! notify_all "$level" "$title" "$body"; then
-    echo "alert was not delivered, will retry on the next run" >&2
+if ! notify_all "$level" "$title" "$body" "$MARK_DIR" "${send_keys[@]}"; then
+    echo "alert was not delivered to every channel, will retry the missing ones on the next run" >&2
     exit 1
 fi
+for k in "${send_keys[@]}"; do rm -f -- "$MARK_DIR/$k".*; done
 
 for entry in "${new_keys[@]}"; do
     IFS='|' read -r key msg <<< "$entry"

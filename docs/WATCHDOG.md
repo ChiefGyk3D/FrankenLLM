@@ -76,9 +76,19 @@ sudo scripts/install-watchdog.sh test      # sends a test alert through every ch
 sudo scripts/install-watchdog.sh status    # timer state and the checks right now
 ```
 
+`install` stops at the first step that fails, names it, and prints the success line only when every step worked. It also sets an existing settings file to owner `root:root`, mode `0600`. `test` refuses a settings file that is not owned by root or that group or others can access. `status` loads the same settings file as the timer run, so a custom host, ports or label show up in what it prints.
+
+### The sudo policy the installer expects
+
+The installer runs as root, and Bash and the dynamic loader act on `BASH_ENV`, exported functions and `LD_*` before the first script line, so the script cannot undo them. The boundary is the sudo policy: use the default `env_reset` with a `secure_path`, and never a policy that preserves `PATH` or those variables (`env_keep`, `SETENV`, `--preserve-env`). The script pins its own `PATH` to system directories as its first statement (as root, whether it is run or sourced), uses no external program before that, and as root makes a best-effort check: it refuses to run (nonzero exit) when the environment carries `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, `GLOBIGNORE`, any `LD_*` variable or any exported function, using explicit `builtin` calls so an imported function cannot hide the others. A hostile environment can still defeat that check from inside the shell (an exported function named `builtin`, or `BASH_ENV` code that runs first), so it only catches mistakes. The sudo policy is the boundary; this check is a safety net, not a substitute for fixing the policy. As a real root, `test` also ignores every `WATCHDOG_*` test override, including `WATCHDOG_DRY_RUN`.
+
+Before it chowns, chmods or reads the settings file, the installer also requires every directory above it to be a real directory (not a symlink), owned by root and not group or other writable, and names the unsafe one otherwise.
+
+Delivery is tracked per channel. If one channel fails, the next run retries only that channel; a channel that already delivered is not sent the same alert again. A problem counts as notified, and its reminder clock starts, only when every configured channel has delivered. (The test alert still counts as delivered when at least one channel gets it.)
+
 ### Secrets from Doppler
 
-Keep the channel values in a Doppler config instead of the env file: put only `DOPPLER_TOKEN` and `WATCHDOG_USE_DOPPLER=true` in `/etc/frankenllm/watchdog.env`, and the watchdog re-runs itself under `doppler run --`.
+Keep the channel values in a Doppler config instead of the env file: put only `DOPPLER_TOKEN` and `WATCHDOG_USE_DOPPLER=true` in `/etc/frankenllm/watchdog.env`, and the watchdog re-runs itself under `doppler run --`. The timer does this as an unprivileged user. `install-watchdog.sh test` and `status` run as root and never start Doppler, because whoever can edit the Doppler config could otherwise run code as root; `test` only tries channels set in the settings file and says so. To test the Doppler path, run the unit once: `sudo systemctl start frankenllm-watchdog.service`, then `sudo journalctl -u frankenllm-watchdog.service -n 30`. The installer also pins PATH to system directories and refuses a settings file that is a symbolic link.
 
 ### Stop the driver drifting again
 

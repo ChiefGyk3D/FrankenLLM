@@ -277,7 +277,8 @@ healthy
 : > "$WORK/lib/libnvidia-ml.so.595.99.03"
 rm "$WORK/lib/libnvidia-ml.so.595.99.02"
 STUB_EMAIL_FAIL=1 run_wd $T0 SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test "$DISCORD"
-check "delivered via discord, exit 0" "$(rc)" 0
+check "one channel failed: not recorded as notified, exit 1" "$(rc)" 1
+check "delivered via discord meanwhile" "$(calls)" 1
 contains "failure reported" "$WORK/out.log" "email delivery failed"
 
 echo "--print is read-only"
@@ -359,16 +360,19 @@ rm -f "$ENVF"
 echo "install-watchdog.sh test never executes the env file"
 healthy
 printf 'DISCORD_WEBHOOK_URL=$(touch "%s")\n' "$MARK" > "$ENVF"
+chmod 600 "$ENVF"
 env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
     STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
 check "hostile file: exit 1" "$?" 1
 nomark "hostile value is not executed as root would have"
 printf 'touch "%s"\n' "$MARK" > "$ENVF"
+chmod 600 "$ENVF"
 env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
     STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
 check "bare command line: exit 1" "$?" 1
 nomark "bare command line is not executed"
 printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+chmod 600 "$ENVF"
 env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
     STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$REPO/scripts/install-watchdog.sh" test > "$WORK/o.log" 2>&1
 check "good file: exit 0" "$?" 0
@@ -582,6 +586,409 @@ if [ "$(id -u)" -ne 0 ]; then
     contains "variables without the switch: says to run as root" "$WORK/o.log" "Run this as root"
 fi
 rm -rf "$WORK/decoy" "$ENVF"
+
+# =============================================================================
+# Polish round: per-channel retry, installer fail-fast, status and test use the
+# real settings, settings file ownership.
+# =============================================================================
+EM=(SMTP_HOST=smtp.test SMTP_FROM=a@test EMAIL_TO=b@test)
+mark_count() { find "$WORK/state/.sent" -maxdepth 1 -type f 2> /dev/null | wc -l | tr -d ' '; }
+email_count() { wc -l < "$EMAILS" | tr -d ' '; }
+unskew() { # fix the skew without wiping state
+    rm -f "$WORK/lib"/libnvidia-ml.so.595.99.03
+    : > "$WORK/lib/libnvidia-ml.so.595.99.02"
+}
+
+echo "a failed channel is retried, a delivered one is not re-sent"
+healthy
+skew
+STUB_EMAIL_FAIL=1 run_wd $T0 "${EM[@]}" "$DISCORD"
+check "partial: exit 1" "$(rc)" 1
+check "partial: not recorded as notified" "$(state_count)" 0
+check "partial: discord got it once" "$(calls)" 1
+check "partial: email tried once" "$(email_count)" 1
+run_wd $((T0 + 300)) "${EM[@]}" "$DISCORD"
+check "retry: exit 0" "$(rc)" 0
+check "retry: discord is not sent a second time" "$(calls)" 1
+check "retry: email delivered" "$(email_count)" 2
+check "retry: now recorded as notified" "$(state_keys)" "gpu-skew "
+check "retry: markers cleared" "$(mark_count)" 0
+run_wd $((T0 + 25 * HOUR)) "${EM[@]}" "$DISCORD"
+check "reminder goes to every channel again" "$(calls)" 2
+
+echo "a failed recovery notice is retried on the failed channel only"
+healthy
+skew
+run_wd $T0 "${EM[@]}" "$DISCORD"
+check "problem notified everywhere" "$(calls)/$(email_count)" "1/1"
+unskew
+STUB_EMAIL_FAIL=1 run_wd $((T0 + HOUR)) "${EM[@]}" "$DISCORD"
+check "recovery partial: exit 1" "$(rc)" 1
+check "recovery partial: state kept" "$(state_keys)" "gpu-skew "
+run_wd $((T0 + HOUR + 300)) "${EM[@]}" "$DISCORD"
+check "recovery retry: exit 0" "$(rc)" 0
+check "recovery retry: discord not repeated" "$(calls)" 2
+check "recovery retry: email delivered" "$(email_count)" 3
+check "recovery retry: state cleared" "$(state_count)" 0
+
+echo "a problem that returns before a pending recovery notice is retried is announced as NEW"
+healthy
+skew
+run_wd $T0 "${EM[@]}" "$DISCORD"
+unskew
+STUB_EMAIL_FAIL=1 run_wd $((T0 + HOUR)) "${EM[@]}" "$DISCORD"
+check "recovery partial: exit 1, state kept" "$(rc)/$(state_keys)" "1/gpu-skew "
+check "recovery partial: discord told of the recovery" "$(calls)" 2
+skew
+run_wd $((T0 + HOUR + 300)) "${EM[@]}" "$DISCORD"
+check "recurrence: exit 0" "$(rc)" 0
+check "recurrence: every channel gets a problem alert (discord)" "$(calls)" 3
+check "recurrence: every channel gets a problem alert (email)" "$(email_count)" 3
+contains "recurrence: announced as NEW" "$CALLS" "NEW"
+check "recurrence: tracked again, no stale markers" "$(state_keys)/$(mark_count)" "gpu-skew /0"
+
+echo "a stale delivery marker does not suppress a later new problem"
+healthy
+skew
+STUB_EMAIL_FAIL=1 run_wd $T0 "${EM[@]}" "$DISCORD"
+check "marker left after a partial send" "$(mark_count)" 1
+unskew
+run_wd $((T0 + 300)) "${EM[@]}" "$DISCORD"
+check "problem cleared before the retry: quiet" "$(rc)" 0
+check "problem cleared before the retry: no state" "$(state_count)" 0
+check "problem cleared before the retry: marker pruned" "$(mark_count)" 0
+skew
+run_wd $((T0 + 600)) "${EM[@]}" "$DISCORD"
+check "the problem returns: discord is told again" "$(calls)" 2
+
+echo "a delivery that cannot be recorded counts as failed"
+healthy
+skew
+: > "$WORK/state/.sent" # a file where the marker directory must go: mkdir fails
+run_wd $T0 "$DISCORD"
+check "unrecorded delivery: exit 1" "$(rc)" 1
+check "unrecorded delivery: not recorded as notified" "$(test -e "$WORK/state/gpu-skew" && echo recorded || echo none)" none
+contains "unrecorded delivery: one diagnostic line" "$WORK/out.log" "delivery marker could not be written"
+lacks "unrecorded delivery: no secret in the message" "$WORK/out.log" "secrettoken"
+
+echo "status refuses a settings symlink"
+SLIB="$WORK/status-lib"
+mkdir -p "$SLIB" "$WORK/sbin"
+cp "$SCRIPTS/watchdog-env.sh" "$SLIB/"
+printf '#!/bin/bash\necho "PRINT label=[${WATCHDOG_LABEL:-}]"\n' > "$SLIB/watchdog.sh"
+chmod +x "$SLIB/watchdog.sh"
+printf 'WATCHDOG_LABEL=ViaLink\n' > "$WORK/link-target"
+chmod 600 "$WORK/link-target"
+ln -s "$WORK/link-target" "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SLIB" \
+    bash "$INSTALL" status > "$WORK/o.log" 2>&1
+lacks "status does not read through a symlink" "$WORK/o.log" "ViaLink"
+contains "status says why" "$WORK/o.log" "symbolic link"
+rm -f "$ENVF" "$WORK/link-target"
+rm -rf "$SLIB" "$WORK/sbin"
+
+echo "install-watchdog.sh test still succeeds when one channel delivers"
+healthy
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\nSMTP_HOST=smtp.test\nSMTP_FROM=a@test\nEMAIL_TO=b@test\n' > "$ENVF"
+chmod 600 "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_EMAILS="$EMAILS" STUB_EMAIL_FAIL=1 bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "test alert: one channel is enough, exit 0" "$?" 0
+rm -f "$ENVF"
+
+echo "the installer stops at the first failed step"
+IBIN="$WORK/ibin"
+ILOG="$WORK/install-steps.log"
+mkdir -p "$IBIN" "$WORK/inst-lib" "$WORK/inst-units" "$WORK/inst-etc"
+chmod 755 "$WORK/inst-etc" # the umask may leave it group-writable, which is refused
+for tool in install chown systemctl; do
+    cat > "$IBIN/$tool" << 'STUB'
+#!/bin/bash
+echo "$(basename "$0") $*" >> "$STUB_STEPS"
+case "$*" in *"${STUB_FAIL_ON:-@@none@@}"*) exit 1 ;; esac
+exit 0
+STUB
+    chmod +x "$IBIN/$tool"
+done
+run_install() { # run_install FAIL_ON  -> cmd_install as a stubbed root, rc in o.log
+    : > "$ILOG"
+    env -i PATH="$IBIN:$BIN:/usr/bin:/bin" STUB_STEPS="$ILOG" STUB_FAIL_ON="$1" \
+        bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; check_settings_dirs() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install; echo "rc=$?"' \
+        _ "$INSTALL" "$WORK/inst-etc/watchdog.env" "$WORK/inst-lib" "$WORK/inst-units" > "$WORK/o.log" 2>&1
+}
+printf 'WATCHDOG_LABEL=x\n' > "$WORK/inst-etc/watchdog.env"
+chmod 644 "$WORK/inst-etc/watchdog.env"
+run_install "@@none@@"
+contains "all steps ok: success message" "$WORK/o.log" "Watchdog timer enabled."
+contains "all steps ok: rc 0" "$WORK/o.log" "rc=0"
+contains "existing settings file: owner set to root:root" "$ILOG" "chown root:root $WORK/inst-etc/watchdog.env"
+check "existing settings file: mode 0600" "$(stat -c %a "$WORK/inst-etc/watchdog.env")" 600
+for failing in "watchdog-notify.sh" "frankenllm-watchdog.timer" "root:root" "daemon-reload" "enable --now"; do
+    printf 'WATCHDOG_LABEL=x\n' > "$WORK/inst-etc/watchdog.env"
+    run_install "$failing"
+    lacks "step [$failing] failed: no success message" "$WORK/o.log" "Watchdog timer enabled."
+    lacks "step [$failing] failed: rc is not 0" "$WORK/o.log" "rc=0"
+    contains "step [$failing] failed: says which step" "$WORK/o.log" "Install failed at:"
+done
+run_install "watchdog-notify.sh"
+lacks "after a failed copy nothing is enabled" "$ILOG" "systemctl"
+# A planted symbolic link at the settings path must never be chowned or chmodded.
+rm -f "$WORK/inst-etc/watchdog.env"
+printf 'unrelated\n' > "$WORK/link-target"
+chmod 644 "$WORK/link-target"
+ln -s "$WORK/link-target" "$WORK/inst-etc/watchdog.env"
+run_install "@@none@@"
+contains "symlink: refused with a message" "$WORK/o.log" "symbolic link"
+lacks "symlink: no success message" "$WORK/o.log" "Watchdog timer enabled."
+lacks "symlink: rc is not 0" "$WORK/o.log" "rc=0"
+check "symlink: the target keeps its mode" "$(stat -c %a "$WORK/link-target")" 644
+lacks "symlink: nothing was chowned" "$ILOG" "chown"
+rm -f "$WORK/inst-etc/watchdog.env"
+ln -s "$WORK/does-not-exist" "$WORK/inst-etc/watchdog.env"
+run_install "@@none@@"
+contains "dangling symlink: refused" "$WORK/o.log" "symbolic link"
+lacks "dangling symlink: rc is not 0" "$WORK/o.log" "rc=0"
+check "dangling symlink: nothing created at the target" "$(test -e "$WORK/does-not-exist" && echo created || echo absent)" absent
+# test and status refuse it too
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$WORK/inst-etc/watchdog.env" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "test refuses a symlink: exit 1" "$?" 1
+contains "test refuses a symlink: message" "$WORK/o.log" "symbolic link"
+rm -f "$WORK/inst-etc/watchdog.env"
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$WORK/link-target"
+chmod 600 "$WORK/link-target"
+ln -s "$WORK/link-target" "$WORK/inst-etc/watchdog.env"
+healthy
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$WORK/inst-etc/watchdog.env" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "test refuses a symlink to a good file: exit 1" "$?" 1
+check "test refuses a symlink to a good file: nothing sent" "$(calls)" 0
+rm -f "$WORK/inst-etc/watchdog.env" "$WORK/link-target"
+rm -rf "$IBIN" "$ILOG" "$WORK/inst-lib" "$WORK/inst-units" "$WORK/inst-etc"
+
+echo "status loads the same settings the timer run loads"
+SLIB="$WORK/status-lib"
+mkdir -p "$SLIB" "$WORK/sbin"
+cp "$SCRIPTS/watchdog-env.sh" "$SLIB/"
+cat > "$SLIB/watchdog.sh" << 'STUB'
+#!/bin/bash
+echo "PRINT label=[${WATCHDOG_LABEL:-}] ports=[${WATCHDOG_PORTS:-}] doppler=[${WATCHDOG_USE_DOPPLER:-}]"
+STUB
+chmod +x "$SLIB/watchdog.sh"
+printf '#!/bin/bash\nexit 0\n' > "$WORK/sbin/systemctl"
+chmod +x "$WORK/sbin/systemctl"
+status_run() {
+    env -i PATH="$WORK/sbin:$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SLIB" \
+        bash "$INSTALL" status > "$WORK/o.log" 2>&1
+}
+printf 'WATCHDOG_LABEL=CustomBox\nWATCHDOG_PORTS=11500 11501\nWATCHDOG_USE_DOPPLER=true\n' > "$ENVF"
+chmod 600 "$ENVF"
+status_run
+contains "status shows the custom label" "$WORK/o.log" "label=[CustomBox]"
+contains "status shows the custom ports" "$WORK/o.log" "ports=[11500 11501]"
+contains "status never starts the secrets manager" "$WORK/o.log" "doppler=[]"
+printf 'WATCHDOG_LABEL=$(touch "%s")\n' "$MARK" > "$ENVF"
+printf 'touch "%s"\n' "$MARK" >> "$ENVF"
+chmod 600 "$ENVF"
+status_run
+nomark "status does not execute the settings file"
+contains "status says a bad settings file was rejected" "$WORK/o.log" "rejected"
+printf 'WATCHDOG_LABEL=CustomBox\n' > "$ENVF"
+chmod 644 "$ENVF"
+status_run
+lacks "status ignores a world-readable settings file" "$WORK/o.log" "label=[CustomBox]"
+contains "status says why" "$WORK/o.log" "group or others can access it"
+rm -f "$ENVF"
+rm -rf "$SLIB" "$WORK/sbin"
+
+echo "test never runs the secrets manager client as root"
+DBIN="$WORK/dbin"
+DLOG="$WORK/doppler.log"
+mkdir -p "$DBIN"
+cat > "$DBIN/doppler" << 'STUB'
+#!/bin/bash
+echo "doppler $*" >> "$STUB_DOPPLER_LOG"
+exit 0
+STUB
+chmod +x "$DBIN/doppler"
+: > "$DLOG"
+healthy
+printf 'WATCHDOG_USE_DOPPLER=true\nDOPPLER_TOKEN=dp.st.fake\nDISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+chmod 600 "$ENVF"
+env -i PATH="$DBIN:$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_DOPPLER_LOG="$DLOG" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "channel in the settings file still tested: exit 0" "$?" 0
+check "channel in the settings file still tested: alert sent" "$(calls)" 1
+check "the secrets client was never invoked" "$(wc -c < "$DLOG" | tr -d ' ')" 0
+contains "says it does not fetch secrets as root" "$WORK/o.log" "does not fetch secrets as root"
+contains "says how to test the secrets path" "$WORK/o.log" "systemctl start frankenllm-watchdog.service"
+healthy
+printf 'WATCHDOG_USE_DOPPLER=true\nDOPPLER_TOKEN=dp.st.fake\n' > "$ENVF"
+chmod 600 "$ENVF"
+env -i PATH="$DBIN:$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+    STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" STUB_DOPPLER_LOG="$DLOG" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+check "secrets-only settings: nothing to test here, exit 1" "$?" 1
+check "secrets-only settings: client still not invoked" "$(wc -c < "$DLOG" | tr -d ' ')" 0
+contains "secrets-only settings: note printed" "$WORK/o.log" "does not fetch secrets as root"
+rm -f "$ENVF" "$DLOG"
+rm -rf "$DBIN"
+
+echo "a hostile ambient PATH cannot redirect the tools run as root"
+HBIN="$WORK/hostile-bin"
+HLOG="$WORK/hostile.log"
+mkdir -p "$HBIN" "$WORK/hlib"
+for t in systemctl head; do
+    printf '#!/bin/bash\necho "hostile %s" >> "%s"\nexit 0\n' "$t" "$HLOG" > "$HBIN/$t"
+    chmod +x "$HBIN/$t"
+done
+printf '#!/bin/bash\necho "PRINT ran"\n' > "$WORK/hlib/watchdog.sh"
+chmod +x "$WORK/hlib/watchdog.sh"
+: > "$HLOG"
+# As a stubbed root (no test switch): status must pin PATH before it runs anything.
+env -i PATH="$HBIN:/usr/bin:/bin" bash -c 'source "$1"; current_uid() { echo 0; }; ENV_FILE="$2"; LIB_DIR="$3"; cmd_status; echo "PATH=$PATH"' \
+    _ "$INSTALL" "$WORK/no-such.env" "$WORK/hlib" > "$WORK/o.log" 2>&1
+check "no tool from the hostile PATH ran" "$(wc -c < "$HLOG" | tr -d ' ')" 0
+contains "PATH was pinned to system directories" "$WORK/o.log" "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+rm -rf "$HBIN" "$HLOG" "$WORK/hlib"
+
+echo "the script never runs a PATH tool before it pins PATH"
+HBIN="$WORK/hostile-bin"
+HLOG="$WORK/hostile.log"
+mkdir -p "$HBIN"
+# A dirname that records itself and then behaves, so only the log shows the run.
+printf '#!/bin/sh\necho "hostile dirname" >> "%s"\nexec /usr/bin/dirname "$@"\n' "$HLOG" > "$HBIN/dirname"
+chmod +x "$HBIN/dirname"
+: > "$HLOG"
+# Run as a script (not sourced), hostile directory first in PATH.
+env -i PATH="$HBIN:/usr/bin:/bin" bash "$INSTALL" status > "$WORK/o.log" 2>&1
+check "hostile dirname never ran" "$(wc -c < "$HLOG" | tr -d ' ')" 0
+rm -rf "$HBIN" "$HLOG"
+
+echo "as root, a dangerous environment is refused before anything runs"
+RBIN="$WORK/rbin"
+RLOG="$WORK/root-steps.log"
+mkdir -p "$RBIN"
+for tool in install chown systemctl; do
+    printf '#!/bin/bash\necho "%s $*" >> "%s"\nexit 0\n' "$tool" "$RLOG" > "$RBIN/$tool"
+    chmod +x "$RBIN/$tool"
+done
+: > "$WORK/empty-env-file"
+root_env_run() { # root_env_run VAR=value...  -> cmd_install as a stubbed root
+    : > "$RLOG"
+    env -i PATH="$RBIN:$BIN:/usr/bin:/bin" "$@" \
+        bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; check_settings_dirs() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install' \
+        _ "$INSTALL" "$WORK/inst-env/watchdog.env" "$WORK/inst-lib" "$WORK/inst-units" > "$WORK/o.log" 2>&1
+}
+mkdir -p "$WORK/inst-env"
+for assign in "BASH_ENV=$WORK/empty-env-file" "ENV=$WORK/empty-env-file" "SHELLOPTS=braceexpand" "BASHOPTS=cmdhist" "CDPATH=/" "GLOBIGNORE=x" "LD_LIBRARY_PATH=/nonexistent" "LD_PRELOAD=" 'BASH_FUNC_evil%%=() { :; }'; do
+    root_env_run "$assign"
+    check "[${assign%%=*}] set: refused" "$?" 1
+    contains "[${assign%%=*}] set: says why" "$WORK/o.log" "sudo policy is not resetting the environment"
+    check "[${assign%%=*}] set: nothing was run" "$(wc -c < "$RLOG" | tr -d ' ')" 0
+done
+root_env_run STUB_CLEAN=1
+check "clean environment: install proceeds" "$(test "$(grep -c . "$RLOG")" -gt 0 && echo ran || echo idle)" ran
+contains "clean environment: success" "$WORK/o.log" "Watchdog timer enabled."
+# Exported functions named like the detector's own builtins must not hide each
+# other, and a later command (stat) must never run their code.
+STATLOG="$WORK/hostile-stat.log"
+: > "$STATLOG"
+root_env_run 'BASH_FUNC_compgen%%=() { :; }' 'BASH_FUNC_declare%%=() { :; }' "BASH_FUNC_stat%%=() { echo ran >> $STATLOG; }"
+check "functions named compgen and declare: still refused" "$?" 1
+contains "functions named compgen and declare: the exported function is named" "$WORK/o.log" "BASH_FUNC_stat"
+check "a hostile stat function never ran" "$(wc -c < "$STATLOG" | tr -d ' ')" 0
+check "nothing was run" "$(wc -c < "$RLOG" | tr -d ' ')" 0
+rm -f "$STATLOG"
+rm -rf "$RBIN" "$RLOG" "$WORK/empty-env-file" "$WORK/inst-env" "$WORK/inst-lib" "$WORK/inst-units"
+
+echo "a sourced root shell never runs id before PATH is pinned"
+HBIN="$WORK/hostile-bin"
+HLOG="$WORK/hostile.log"
+mkdir -p "$HBIN"
+printf '#!/bin/sh\necho "hostile id" >> "%s"\nexec /usr/bin/id "$@"\n' "$HLOG" > "$HBIN/id"
+chmod +x "$HBIN/id"
+: > "$HLOG"
+# current_uid is NOT stubbed: the real lookup must not use a PATH program.
+env -i PATH="$HBIN:/usr/bin:/bin" bash -c 'source "$1"; cmd_status' _ "$INSTALL" > "$WORK/o.log" 2>&1
+check "hostile id never ran" "$(wc -c < "$HLOG" | tr -d ' ')" 0
+rm -rf "$HBIN" "$HLOG"
+
+echo "a real root test run ignores the notifier dry-run seam"
+healthy
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+chmod 600 "$ENVF"
+env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_DRY_RUN=1 STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" \
+    bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; check_settings_dirs() { :; }; check_settings_perms() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; cmd_test' \
+    _ "$INSTALL" "$ENVF" "$SCRIPTS" > "$WORK/o.log" 2>&1
+check "root test with the dry-run switches set: delivered" "$(calls)" 1
+lacks "root test with the dry-run switches set: no dry-run text" "$WORK/o.log" "DRY RUN"
+rm -f "$ENVF"
+
+echo "every directory above the settings file must be root-owned and not writable by others"
+DT="$WORK/dtest"
+rm -rf "$DT"
+mkdir -p "$DT/a/b"
+chmod 755 "$DT" "$DT/a" "$DT/a/b"
+dirs_check() { # dirs_check FILE UID [SEAM]
+    env -i PATH="$BIN:/usr/bin:/bin" bash -c 'source "$1"; check_settings_dirs "$2" "$3" "$4"; echo "rc=$?"' _ "$INSTALL" "$1" "$2" "${3:-}" 2>&1
+}
+UID_NOW="$(id -u)"
+out="$(dirs_check "$DT/a/b/watchdog.env" "$UID_NOW" 1)"
+check "private parents: accepted (test seam)" "${out##*rc=}" 0
+chmod 775 "$DT/a"
+out="$(dirs_check "$DT/a/b/watchdog.env" "$UID_NOW" 1)"
+check "group-writable parent: refused" "${out##*rc=}" 1
+case "$out" in *"$DT/a is group or other writable"*) PASS=$((PASS + 1)); echo "  ok   group-writable parent: names the directory" ;; *) FAIL=$((FAIL + 1)); echo "  FAIL group-writable parent: names the directory: [$out]" ;; esac
+chmod 757 "$DT/a"
+out="$(dirs_check "$DT/a/b/watchdog.env" "$UID_NOW" 1)"
+check "other-writable parent: refused" "${out##*rc=}" 1
+chmod 755 "$DT/a"
+if [ "$UID_NOW" -ne 0 ]; then
+    out="$(dirs_check "$DT/a/b/watchdog.env" 0 1)"
+    check "parent owned by someone else: refused" "${out##*rc=}" 1
+    out="$(dirs_check "$DT/a/b/watchdog.env" "$UID_NOW")"
+    check "root-only rule (no test seam): a non-root tree is refused" "${out##*rc=}" 1
+fi
+ln -s "$DT/a" "$DT/link"
+out="$(dirs_check "$DT/link/b/watchdog.env" "$UID_NOW" 1)"
+check "symlinked directory component: refused" "${out##*rc=}" 1
+case "$out" in *"symbolic link"*) PASS=$((PASS + 1)); echo "  ok   symlinked component: says so" ;; *) FAIL=$((FAIL + 1)); echo "  FAIL symlinked component: says so: [$out]" ;; esac
+out="$(dirs_check "relative/watchdog.env" "$UID_NOW" 1)"
+check "relative path: refused" "${out##*rc=}" 1
+# wired in: the installer stops before touching anything when the parent is unsafe
+mkdir -p "$WORK/ibin2"
+for tool in install chown systemctl; do
+    printf '#!/bin/bash\necho "%s $*" >> "%s"\nexit 0\n' "$tool" "$WORK/ibin2.log" > "$WORK/ibin2/$tool"
+    chmod +x "$WORK/ibin2/$tool"
+done
+: > "$WORK/ibin2.log"
+env -i PATH="$WORK/ibin2:$BIN:/usr/bin:/bin" bash -c 'source "$1"; current_uid() { echo 0; }; set_safe_path() { :; }; ENV_FILE="$2"; LIB_DIR="$3"; UNIT_DIR="$4"; cmd_install; echo "rc=$?"' \
+    _ "$INSTALL" "$DT/a/b/watchdog.env" "$WORK/inst-lib" "$WORK/inst-units" > "$WORK/o.log" 2>&1
+lacks "install with an unsafe parent: no success" "$WORK/o.log" "Watchdog timer enabled."
+lacks "install with an unsafe parent: rc is not 0" "$WORK/o.log" "rc=0"
+check "install with an unsafe parent: nothing was run" "$(wc -c < "$WORK/ibin2.log" | tr -d ' ')" 0
+rm -rf "$DT" "$WORK/ibin2" "$WORK/ibin2.log"
+
+echo "the settings file must be root-owned and private"
+printf 'DISCORD_WEBHOOK_URL=https://discord.test/api/webhooks/9/tok\n' > "$ENVF"
+for m in 640 644 604 660; do
+    healthy
+    chmod "$m" "$ENVF"
+    env -i PATH="$BIN:/usr/bin:/bin" WATCHDOG_TESTING=1 WATCHDOG_ENV_FILE="$ENVF" WATCHDOG_INSTALLED_LIB="$SCRIPTS" \
+        STUB_ARGV="$ARGV" STUB_CALLS="$CALLS" bash "$INSTALL" test > "$WORK/o.log" 2>&1
+    check "mode $m refused" "$?" 1
+    check "mode $m: nothing sent" "$(calls)" 0
+    contains "mode $m: message" "$WORK/o.log" "group or others can access it"
+done
+chmod 600 "$ENVF"
+perm_check() { # perm_check UID GID -> rc of check_settings_perms on $ENVF
+    env -i PATH="$BIN:/usr/bin:/bin" bash -c 'source "$1"; check_settings_perms "$2" "$3" "$4" 2> /dev/null; echo "rc=$?"' _ "$INSTALL" "$ENVF" "$1" "$2" 2>&1
+}
+check "owner and mode right: accepted" "$(perm_check "$(id -u)" "$(id -g)")" "rc=0"
+if [ "$(id -u)" -ne 0 ]; then
+    check "not owned by root: refused" "$(perm_check 0 0)" "rc=1"
+fi
+rm -f "$ENVF"
 
 echo "the unit file carries the hardening"
 UNIT="$REPO/scripts/frankenllm-watchdog.service"
