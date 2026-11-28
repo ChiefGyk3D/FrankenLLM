@@ -12,6 +12,7 @@
 # Usage: tests/test-install-flow.sh
 
 set -u
+umask 022   # the undo-area checks reject group and other writable files, as they do for root
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v zstd > /dev/null || { echo "zstd is required for this test"; exit 2; }
 
@@ -41,7 +42,7 @@ mkdir -p "$TOOLS" "$STUB" "$WORK/home"
 # real tools the server script needs, by symlink (no ollama, no nvidia-smi, no real sudo)
 for t in bash sh cat cut grep egrep head tail wc seq tee mktemp rm mkdir install cp mv ln id getent stat sleep date \
          cmp tr sed awk sort dirname basename env uname tar sha256sum chmod touch ls readlink realpath zstd true false \
-         expr test printf; do
+         expr test printf find; do
     p="$(command -v "$t" 2> /dev/null || true)"
     case "$p" in /*) ln -sf "$p" "$TOOLS/$t" ;; esac
 done
@@ -81,7 +82,7 @@ for a in "$@"; do
     args+=("$a")
 done
 case "${args[0]}" in
-    mkdir|install|mv|tee|rm|tar|cp|chmod|test|touch|cmp|systemctl|systemd-analyze) exec "${args[@]}" ;;
+    mkdir|install|mv|tee|rm|tar|cp|chmod|test|touch|cmp|ls|readlink|stat|find|chmod|systemctl|systemd-analyze) exec "${args[@]}" ;;
     useradd)
         echo "useradd ${args[*]}" >> "$STUB_LOG"
         name="${args[${#args[@]}-1]}"
@@ -110,12 +111,22 @@ for u in "${units[@]}"; do
         stop) rm -f "$STUB_STATE/active.$u" ;;
         enable) touch "$STUB_STATE/enabled.$u" ;;
         disable) rm -f "$STUB_STATE/enabled.$u" ;;
-        mask) [ -n "${STUB_MASK_NOOP:-}" ] || touch "$STUB_STATE/masked.$u" ;;
-        unmask) rm -f "$STUB_STATE/masked.$u" ;;
+        mask)
+            if [ -n "${STUB_MASK_NOOP:-}" ]; then :
+            elif [ -n "${STUB_MASK_NOOP_ONCE:-}" ] && [ ! -e "$STUB_STATE/masknoop.done" ]; then touch "$STUB_STATE/masknoop.done"
+            else
+                touch "$STUB_STATE/masked.$u"
+                # like systemd: a mask is a symlink to /dev/null (never over a real unit file)
+                [ -e "$STUB_ROOT/etc/systemd/system/$u.service" ] || [ -L "$STUB_ROOT/etc/systemd/system/$u.service" ] \
+                    || ln -s /dev/null "$STUB_ROOT/etc/systemd/system/$u.service"
+            fi ;;
+        unmask)
+            rm -f "$STUB_STATE/masked.$u"
+            [ ! -L "$STUB_ROOT/etc/systemd/system/$u.service" ] || rm -f "$STUB_ROOT/etc/systemd/system/$u.service" ;;
         is-active)
             if [ "$u" = "${STUB_FAIL_ACTIVE:-}" ] || [ ! -f "$STUB_STATE/active.$u" ]; then rc=3; fi ;;
         is-enabled)
-            if [ -f "$STUB_STATE/masked.$u" ]; then echo masked; rc=1
+            if [ -L "$STUB_ROOT/etc/systemd/system/$u.service" ] && [ "$(readlink "$STUB_ROOT/etc/systemd/system/$u.service")" = /dev/null ]; then echo masked; rc=1
             elif [ -f "$STUB_STATE/enabled.$u" ]; then echo enabled
             else echo disabled; rc=1; fi ;;
         *) ;;
@@ -197,6 +208,8 @@ PAYLOAD="$WORK/payload.sh"
     echo '#!/bin/bash'
     cat "$REPO/remote/unit-lib.sh"
     # seam: the staged binary lives under the fake /usr/local
+    # seam: the fake tree is owned by the test user, not root
+    echo 'franken_ollama__owner_uid() { id -u; }'
     echo 'franken_ollama__staged_version() { franken_ollama_parse_version "$("$STUB_ROOT$1/bin/ollama" --version 2>&1 || true)"; }'
     cat "$REPO/remote/server-install.sh"
 } > "$PAYLOAD"
@@ -231,7 +244,16 @@ run_server -- "${A[@]}"
 check "unpinned: refuses" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
 check "unpinned: message names the opt-out" "yes" "$(grep -q 'FRANKEN_ALLOW_UNVERIFIED_OLLAMA' <<< "$OUT" && echo yes || echo no)"
 check "unpinned: nothing fetched" "0" "$(grep -c '^curl' <<< "$LOGTXT" || true)"
-check "unpinned: no sudo at all" "0" "$(grep -c '^sudo' <<< "$LOGTXT" || true)"
+# the ONLY sudo calls allowed here are the read-only probes for a leftover undo area:
+# one listing of the install root and two existence tests of the fixed undo path
+ALLOWED_PROBES='^sudo ls -A -- /usr/local$|^sudo test -[eL] /usr/local/\.franken-ollama-undo$'
+probe_extras() { grep '^sudo' <<< "$1" | grep -Ev "$ALLOWED_PROBES" || true; }
+check "unpinned: only the allowed read-only probes ran as sudo" "" "$(probe_extras "$LOGTXT")"
+check "unpinned: the probes did run (the guard sees something)" "yes" "$(grep -qE "$ALLOWED_PROBES" <<< "$LOGTXT" && echo yes || echo no)"
+check "guard bites: a mutating sudo call is reported" "sudo rm -rf /usr/local/.franken-ollama-undo" "$(probe_extras "$(printf 'sudo ls -A -- /usr/local\nsudo rm -rf /usr/local/.franken-ollama-undo')")"
+check "guard bites: a probe of another path is reported" "sudo test -e /usr/local/bin/ollama" "$(probe_extras 'sudo test -e /usr/local/bin/ollama')"
+check "unpinned: nothing fetched" "0" "$(grep -c '^curl' <<< "$LOGTXT" || true)"
+# (the one sudo call allowed is the read-only probe for a leftover undo area)
 # b. pin but no checksum
 reset_root
 mapfile -t B < <(args 11434 11435 "" "" "" "" 0.33.2)
@@ -313,7 +335,7 @@ run_server -- "${A[@]}"
 check "success: rc" "0" "$RC"
 check "success: gpu0 active+enabled" "yes yes" "$(state_of active ollama-gpu0) $(state_of enabled ollama-gpu0)"
 check "success: gpu1 active+enabled" "yes yes" "$(state_of active ollama-gpu1) $(state_of enabled ollama-gpu1)"
-check "success: default masked, stopped, unit file gone" "yes no no" "$(state_of masked ollama) $(state_of active ollama) $([ -e "$UNITDIR/ollama.service" ] && echo yes || echo no)"
+check "success: default masked, stopped, unit file replaced by exactly the /dev/null mask symlink" "yes no link" "$(state_of masked ollama) $(state_of active ollama) $([ -L "$UNITDIR/ollama.service" ] && [ "$(readlink "$UNITDIR/ollama.service")" = /dev/null ] && [ ! -f "$UNITDIR/ollama.service" ] && echo link || echo other)"
 check "success: unit text installed (User line)" "User=tester" "$(grep '^User=' "$UNITDIR/ollama-gpu0.service")"
 check "success: no staging files left in the unit dir" "" "$(find "$UNITDIR" -mindepth 1 -maxdepth 1 -name '.*' -printf '%f\n')"
 check "success: units verified before any unit was installed" "yes" \
@@ -526,6 +548,126 @@ check "wrong staged version: message" "yes" "$(grep -q 'expected layout or versi
 check "wrong staged version: old install intact" "0.30.0 OLDLIB" "$("$FAKE/usr/local/bin/ollama" --version | grep -o '[0-9.]*$') $(cat "$FAKE/usr/local/lib/ollama/OLD")"
 check "wrong staged version: staging removed" "no" "$([ -e "$UNDO" ] && echo yes || echo no)"
 check "wrong staged version: services untouched" "0" "$(grep -c '^sudo systemctl' <<< "$LOGTXT" || true)"
+
+echo "--- M1: a previously masked default unit is masked again after a rollback ---"
+# a masked unit is a symlink to /dev/null plus the masked state
+seed_masked() { ln -s /dev/null "$UNITDIR/ollama.service"; touch "$STATE/masked.ollama"; }
+masked_ok() { echo "$([ "$(readlink "$UNITDIR/ollama.service" 2> /dev/null)" = /dev/null ] && echo link || echo nolink) $(state_of masked ollama) $(state_of active ollama) $(state_of enabled ollama)"; }
+# failure BEFORE the retirement step (a replacement will not start)
+reset_root; seed_ollama; seed_masked
+run_server STUB_FAIL_START=ollama-gpu1 -- "${A[@]}"
+check "masked before, early failure: install fails" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "masked before, early failure: restored and verified, not 70" "yes no" "$(grep -q 'restored and verified' <<< "$OUT" && echo yes || echo no) $([ "$RC" -eq 70 ] && echo yes || echo no)"
+check "masked before, early failure: still the /dev/null symlink and masked" "link yes no no" "$(masked_ok)"
+check "masked before, early failure: no replacement unit files left" "" "$(find "$UNITDIR" -mindepth 1 -maxdepth 1 ! -name ollama.service -printf '%f\n')"
+# failure AFTER the retirement step (the mask did not take effect the first time)
+reset_root; seed_ollama; seed_masked
+run_server STUB_MASK_NOOP_ONCE=1 -- "${A[@]}"
+check "masked before, late failure: install fails" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "masked before, late failure: restored and verified, not 70" "yes no" "$(grep -q 'restored and verified' <<< "$OUT" && echo yes || echo no) $([ "$RC" -eq 70 ] && echo yes || echo no)"
+check "masked before, late failure: masked again as a /dev/null symlink" "link yes no no" "$(masked_ok)"
+check "masked before, late failure: the default was masked again explicitly" "yes" "$([ "$(grep -c '^systemctl mask ollama.service' <<< "$LOGTXT")" -ge 2 ] && echo yes || echo no)"
+# the success path from a masked start still ends masked, with no stray files
+reset_root; seed_ollama; seed_masked
+run_server -- "${A[@]}"
+check "masked before, success: rc and masked symlink" "0 link yes no no" "$RC $(masked_ok)"
+# the mask cannot be put back during the rollback: reported, not claimed
+reset_root; seed_ollama; seed_masked
+run_server STUB_FAIL_START=ollama-gpu1 "STUB_FAIL_CMDS=mask:ollama" -- "${A[@]}"
+check "masked before, re-mask fails: ROLLBACK INCOMPLETE, exit 70" "yes 70" "$(grep -q 'mask ollama.service again' <<< "$OUT" && grep -q 'ROLLBACK INCOMPLETE' <<< "$OUT" && echo yes) $RC"
+# any other symlink is not understood: refused before anything changes
+reset_root; seed_ollama; ln -s /usr/lib/systemd/system/other.service "$UNITDIR/ollama.service"
+run_server -- "${A[@]}"
+check "foreign symlink: refused, nothing mutated" "yes 0" "$(grep -q 'symlink to something other than /dev/null' <<< "$OUT" && echo yes) $(grep -c '^sudo systemctl' <<< "$LOGTXT" || true)"
+
+echo "--- M2: a stale Ollama undo area is recovered, never deleted ---"
+# the old install is in the undo area after the first swap (lib moved, bin not yet)
+seed_stale_first_swap() {
+    seed_old_install
+    mkdir -p "$UNDO/backup" "$UNDO/stage/bin"
+    mv "$FAKE/usr/local/lib/ollama" "$UNDO/backup/lib"
+    mkdir -p "$FAKE/usr/local/lib/ollama"; echo NEWLIB > "$FAKE/usr/local/lib/ollama/libfoo.so"
+    touch "$UNDO/new-lib"
+    printf '#!/bin/sh\necho "ollama version is 0.33.2"\n' > "$UNDO/stage/bin/ollama"; chmod +x "$UNDO/stage/bin/ollama"
+}
+seed_stale_second_swap() {
+    seed_stale_first_swap
+    mkdir -p "$UNDO/stage"
+    rm -rf "${UNDO:?}/stage/bin"
+    mv "$FAKE/usr/local/bin/ollama" "$UNDO/backup/bin"
+    printf '#!/bin/sh\necho "ollama version is 0.33.2"\n' > "$FAKE/usr/local/bin/ollama"; chmod +x "$FAKE/usr/local/bin/ollama"
+    touch "$UNDO/new-bin"
+}
+old_back() { echo "$("$FAKE/usr/local/bin/ollama" --version 2> /dev/null | grep -o '[0-9.]*$') $(cat "$FAKE/usr/local/lib/ollama/OLD" 2> /dev/null) $([ -e "$FAKE/usr/local/lib/ollama/libfoo.so" ] && echo newlib || echo nonew) $([ -e "$UNDO" ] && echo undo || echo noundo)"; }
+for stage_ in first second; do
+    # the existing install satisfies the request: the interrupted swap is still undone
+    reset_root; "seed_stale_${stage_}_swap"; seed_default
+    run_server -- "${A[@]}"
+    check "stale undo after $stage_ swap, no pin: old install restored first" "0.30.0 OLDLIB nonew noundo" "$(old_back)"
+    check "stale undo after $stage_ swap, no pin: says it recovered" "yes" "$(grep -q 'Previous Ollama files restored and verified' <<< "$OUT" && echo yes || echo no)"
+    # a new transaction after the recovery that then fails: the old install still comes back
+    reset_root; "seed_stale_${stage_}_swap"; seed_default
+    run_server STUB_FAIL_START=ollama-gpu1 -- "${C[@]}"
+    check "stale undo after $stage_ swap, later failure: install fails" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+    check "stale undo after $stage_ swap, later failure: the OLD install is back" "0.30.0 OLDLIB nonew noundo" "$(old_back)"
+done
+# an interrupted run that had not swapped anything yet (only staged files)
+reset_root; seed_old_install; seed_default
+mkdir -p "$UNDO/stage/bin" "$UNDO/backup"; echo staged > "$UNDO/stage/bin/ollama"
+run_server -- "${A[@]}"
+check "stale undo, nothing swapped: old install untouched, area removed" "0.30.0 OLDLIB nonew noundo" "$(old_back)"
+# an ambiguous layout: the backup AND a live item exist, no marker says which is which
+reset_root; seed_old_install; seed_default
+mkdir -p "$UNDO/backup/lib"; echo PRECIOUS > "$UNDO/backup/lib/OLD"
+run_server STUB_FAIL_START=ollama-gpu1 -- "${C[@]}"
+check "ambiguous undo: install refused" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "ambiguous undo: message names the left-untouched area" "yes" "$(grep -q 'left untouched' <<< "$OUT" && echo yes || echo no)"
+claimed_dir() { local d; for d in "$FAKE"/usr/local/.franken-ollama-undo.claimed-*; do [ -e "$d" ] && echo "$d"; done | head -n1; }
+check "ambiguous undo: the area is kept under a claimed name, the original name is free" "yes no" "$([ -n "$(claimed_dir)" ] && echo yes || echo no) $([ -e "$UNDO" ] && echo yes || echo no)"
+check "ambiguous undo: the backup is still there, byte for byte" "PRECIOUS" "$(cat "$(claimed_dir)/backup/lib/OLD" 2> /dev/null)"
+check "ambiguous undo: the message names the claimed directory" "yes" "$(grep -q 'untouched as .*franken-ollama-undo.claimed-' <<< "$OUT" && echo yes || echo no)"
+check "ambiguous undo: the live install is untouched" "0.30.0 OLDLIB" "$("$FAKE/usr/local/bin/ollama" --version | grep -o '[0-9.]*$') $(cat "$FAKE/usr/local/lib/ollama/OLD")"
+check "ambiguous undo: nothing downloaded, no service touched" "0 0" "$(grep -c '^curl' <<< "$LOGTXT" || true) $(grep -c '^sudo systemctl' <<< "$LOGTXT" || true)"
+# an unknown entry in the undo area is also not understood
+reset_root; seed_old_install; seed_default
+mkdir -p "$UNDO/backup"; echo mystery > "$UNDO/something-else"
+run_server -- "${A[@]}"
+check "unknown entry in the undo area: refused, kept" "yes yes" "$([ "$RC" -ne 0 ] && echo yes || echo no) $([ -e "$(claimed_dir)/something-else" ] && echo yes || echo no)"
+
+echo "--- M2b: recovery claims the area, validates it, and never leaves the live item missing ---"
+# nested symlink / hardlink / marker tricks must be refused with the live targets untouched
+nested_case() {  # nested_case DESC SETUP_FUNCTION
+    reset_root; seed_old_install; seed_default
+    mkdir -p "$UNDO/backup" "$UNDO/stage" "$WORK/evil"
+    printf '#!/bin/sh\necho attacker\n' > "$WORK/evil/bin"; chmod +x "$WORK/evil/bin"
+    "$2"
+    run_server -- "${A[@]}"
+    check "$1: refused" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+    check "$1: live binary and lib untouched" "0.30.0 OLDLIB" "$("$FAKE/usr/local/bin/ollama" --version | grep -o '[0-9.]*$') $(cat "$FAKE/usr/local/lib/ollama/OLD")"
+    check "$1: attacker file never moved" "yes" "$([ -e "$WORK/evil/bin" ] && echo yes || echo no)"
+    check "$1: kept under the claimed name" "yes" "$([ -n "$(claimed_dir)" ] && echo yes || echo no)"
+}
+nest_backup_symlink() { rm -rf "$UNDO/backup"; ln -s "$WORK/evil" "$UNDO/backup"; touch "$UNDO/new-bin"; }
+nest_bin_symlink() { ln -s "$WORK/evil/bin" "$UNDO/backup/bin"; touch "$UNDO/new-bin"; }
+nest_bin_hardlink() { ln "$WORK/evil/bin" "$UNDO/backup/bin"; touch "$UNDO/new-bin"; }
+nest_marker_dir() { mkdir "$UNDO/new-bin"; echo x > "$UNDO/backup/bin"; }
+nest_marker_symlink() { ln -s "$WORK/evil/bin" "$UNDO/new-bin"; echo x > "$UNDO/backup/bin"; }
+nest_stage_symlink() { rm -rf "$UNDO/stage"; ln -s "$WORK/evil" "$UNDO/stage"; }
+nest_lib_symlink() { ln -s "$WORK/evil" "$UNDO/backup/lib"; touch "$UNDO/new-lib"; }
+nest_group_writable() { mkdir "$UNDO/backup/lib"; chmod 0775 "$UNDO/backup/lib"; touch "$UNDO/new-lib"; }
+nested_case "undo/backup is a symlink" nest_backup_symlink
+nested_case "backup/bin is a symlink" nest_bin_symlink
+nested_case "backup/bin is a hardlink" nest_bin_hardlink
+nested_case "marker is a directory" nest_marker_dir
+nested_case "marker is a symlink" nest_marker_symlink
+nested_case "stage is a symlink" nest_stage_symlink
+nested_case "backup/lib is a symlink" nest_lib_symlink
+nested_case "backup/lib is group writable" nest_group_writable
+# a claim left behind by an earlier run blocks the next install
+reset_root; seed_old_install; seed_default
+mkdir -p "$FAKE/usr/local/.franken-ollama-undo.claimed-1-2/backup"
+run_server -- "${A[@]}"
+check "leftover claim: refused and named, nothing mutated" "yes yes 0" "$([ "$RC" -ne 0 ] && echo yes || echo no) $(grep -q 'franken-ollama-undo.claimed-1-2 is left over' <<< "$OUT" && echo yes || echo no) $(grep -c '^sudo systemctl' <<< "$LOGTXT" || true)"
 
 check "repo root has no untracked files" "" "$(git -C "$REPO" status --porcelain --untracked-files=all 2>/dev/null | grep '^??' | grep -v 'tests/test-\|ollama-checksums')"
 
