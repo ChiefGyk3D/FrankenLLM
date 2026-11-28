@@ -265,30 +265,71 @@ franken_ollama__fetch_verify() (
     fi
 )
 
-# franken_ollama_undo_restore ROOT [PRIVILEGE_CMD...] - put the previous Ollama
-# files back after a failed or abandoned replacement and remove the staging area.
-# Idempotent; does nothing when there is nothing to undo. Returns 1 if any step fails.
-franken_ollama_undo_restore() {
-    local root="$1" undo rc=0 i
-    shift
-    local -a priv=("$@") names=(lib bin) targets
-    undo="$root/.franken-ollama-undo"
-    ${priv[@]+"${priv[@]}"} test -d "$undo" || return 0
+# franken_ollama__owner_uid - uid that must own the undo area (a seam: tests override it).
+franken_ollama__owner_uid() { echo 0; }
+
+# franken_ollama__node_ok PATH KIND LINKS PRIVILEGE_CMD... - one stat (no symlink
+# followed) must show: KIND dir|file, owned by franken_ollama__owner_uid, not
+# group or other writable, and (LINKS=1) a link count of 1. KIND file means a
+# regular file; a symlink, device or fifo never matches.
+franken_ollama__node_ok() {
+    local path="$1" kind="$2" links="$3" want out u m n t
+    shift 3
+    want="$(franken_ollama__owner_uid)"
+    out="$("$@" stat -c '%u %a %h %F' -- "$path" 2> /dev/null)" || return 1
+    read -r u m n t <<< "$out"
+    [ "$u" = "$want" ] || return 1
+    [[ "$m" =~ ^[0-7]{3,4}$ ]] && [ $((8#$m & 8#022)) -eq 0 ] || return 1
+    [ -z "$links" ] || [ "$n" = "$links" ] || return 1
+    case "$kind:$t" in
+        dir:directory|file:"regular file"|file:"regular empty file") return 0 ;;
+    esac
+    return 1
+}
+
+# franken_ollama__restore_from ROOT UNDO PRIVILEGE_CMD... - put the old items in
+# UNDO/backup back. The live item is never deleted first: it is moved into
+# UNDO/quarantine-NAME, the backup is moved into place, and the quarantine is
+# deleted only with the whole area after every backed-up item is read back in
+# place. If moving the backup fails, the quarantined live item is moved back.
+franken_ollama__restore_from() {
+    local root="$1" undo="$2" rc=0 i q
+    shift 2
+    local -a priv=("$@") names=(lib bin) targets backed=()
     targets=("$root/lib/ollama" "$root/bin/ollama")
     for i in 0 1; do
-        # the new item was moved into place: remove it
+        q="$undo/quarantine-${names[$i]}"
+        local quarantined=0
+        # the new item was moved into place: set it aside (not deleted yet)
         if ${priv[@]+"${priv[@]}"} test -e "$undo/new-${names[$i]}" \
-            && ! ${priv[@]+"${priv[@]}"} test -e "$undo/stage/${targets[$i]#"$root/"}"; then
-            ${priv[@]+"${priv[@]}"} rm -rf -- "${targets[$i]}" || rc=1
+            && ! ${priv[@]+"${priv[@]}"} test -e "$undo/stage/${targets[$i]#"$root/"}" \
+            && { ${priv[@]+"${priv[@]}"} test -e "${targets[$i]}" || ${priv[@]+"${priv[@]}"} test -L "${targets[$i]}"; }; then
+            if ${priv[@]+"${priv[@]}"} mv -- "${targets[$i]}" "$q"; then
+                quarantined=1
+            else
+                rc=1
+                continue
+            fi
         fi
-        if ${priv[@]+"${priv[@]}"} test -e "$undo/backup/${names[$i]}" \
-            && ! ${priv[@]+"${priv[@]}"} test -e "${targets[$i]}"; then
-            ${priv[@]+"${priv[@]}"} mv -- "$undo/backup/${names[$i]}" "${targets[$i]}" || rc=1
+        if ${priv[@]+"${priv[@]}"} test -e "$undo/backup/${names[$i]}" || ${priv[@]+"${priv[@]}"} test -L "$undo/backup/${names[$i]}"; then
+            backed+=("$i")
+            if ! ${priv[@]+"${priv[@]}"} test -e "${targets[$i]}" && ! ${priv[@]+"${priv[@]}"} test -L "${targets[$i]}"; then
+                if ! ${priv[@]+"${priv[@]}"} mv -- "$undo/backup/${names[$i]}" "${targets[$i]}"; then
+                    rc=1
+                    # the live item must not stay missing
+                    if [ "$quarantined" -eq 1 ]; then
+                        ${priv[@]+"${priv[@]}"} mv -- "$q" "${targets[$i]}" || echo "❌ Could not put ${targets[$i]} back from $q; it is kept there."
+                    fi
+                fi
+            else
+                rc=1   # something is in the way: the backup is the only old copy, keep it
+            fi
         fi
     done
-    # a backup that could not go back is the only old copy: keep the area
-    for i in 0 1; do
-        if ${priv[@]+"${priv[@]}"} test -e "$undo/backup/${names[$i]}" || ${priv[@]+"${priv[@]}"} test -L "$undo/backup/${names[$i]}"; then
+    # read back: every backed-up item is in place and no backup is left behind
+    for i in "${backed[@]+"${backed[@]}"}"; do
+        if { ! ${priv[@]+"${priv[@]}"} test -e "${targets[$i]}" && ! ${priv[@]+"${priv[@]}"} test -L "${targets[$i]}"; } \
+            || ${priv[@]+"${priv[@]}"} test -e "$undo/backup/${names[$i]}" || ${priv[@]+"${priv[@]}"} test -L "$undo/backup/${names[$i]}"; then
             rc=1
         fi
     done
@@ -298,69 +339,122 @@ franken_ollama_undo_restore() {
     return "$rc"
 }
 
-# franken_ollama_undo_recover ROOT [PRIVILEGE_CMD...] - the undo area from an
-# earlier run exists (the run was killed before it could clean up). If its layout
-# is one this code can have produced, run franken_ollama_undo_restore and verify
-# that every backed-up item is back in place. Anything else (a symlink, unknown
-# entries, a backup next to a live item without a marker, a failed or unverified
-# restore) fails closed: returns 1 with a message and leaves the area as found
-# whenever the layout was not understood. Returns 0 when there was nothing to do.
+# franken_ollama_undo_restore ROOT [PRIVILEGE_CMD...] - put the previous Ollama
+# files back after a failed or abandoned replacement and remove the staging area.
+# Idempotent; does nothing when there is nothing to undo. Returns 1 if any step fails.
+franken_ollama_undo_restore() {
+    local root="$1" undo
+    shift
+    undo="$root/.franken-ollama-undo"
+    ${@+"$@"} test -d "$undo" || return 0
+    franken_ollama__restore_from "$root" "$undo" ${@+"$@"}
+}
+
+# franken_ollama_undo_recover ROOT [PRIVILEGE_CMD...] - an undo area from an
+# earlier run exists (the run was killed before it could clean up). It may hold
+# the only copy of the old files, and its name is fixed and well known, so:
+#   1. it is CLAIMED first: renamed (one atomic step) to a unique, mode 0700 name
+#      next to it; everything after works only on that claimed directory, so
+#      nothing can swap a part of it between a check and its use
+#   2. the claimed tree is validated: real directories, root-owned (seam
+#      franken_ollama__owner_uid), not group or other writable, markers and the
+#      old binary regular root-owned files (the binary with one link), no
+#      symlink where a directory or file is required, only known entries
+#   3. only then the old files are restored and read back (franken_ollama__restore_from)
+# A claim that fails validation or restoration is left as it is and named; a
+# claim left by an earlier run blocks a new install too (the old copy is not
+# forgotten). Returns 0 when there was nothing to do or the restore is verified.
 franken_ollama_undo_recover() {
-    local root="$1" undo entry i name target
+    local root="$1" undo claim entry i name target
     shift
     local -a priv=("$@") names=(lib bin) targets backed=()
     undo="$root/.franken-ollama-undo"
+    while IFS= read -r entry; do
+        case "$entry" in
+            .franken-ollama-undo.claimed-*)
+                echo "❌ $root/$entry is left over from an earlier interrupted run and may hold the old Ollama files; inspect it by hand, then remove it."
+                return 1 ;;
+        esac
+    done < <(${priv[@]+"${priv[@]}"} ls -A -- "$root" 2> /dev/null)
     if ! ${priv[@]+"${priv[@]}"} test -e "$undo" && ! ${priv[@]+"${priv[@]}"} test -L "$undo"; then
         return 0
     fi
     targets=("$root/lib/ollama" "$root/bin/ollama")
     echo "⚠️  Found $undo from an interrupted earlier run; restoring the previous Ollama files first..."
-    if ${priv[@]+"${priv[@]}"} test -L "$undo" || ! ${priv[@]+"${priv[@]}"} test -d "$undo"; then
-        echo "❌ $undo is not a plain directory; left untouched. Inspect it by hand, then remove it."
+    if ! franken_ollama__node_ok "$root" dir "" ${priv[@]+"${priv[@]}"}; then
+        echo "❌ $root is not a root-owned, non-writable directory; $undo left untouched."
         return 1
     fi
-    while IFS= read -r entry; do
-        case "$entry" in
-            ''|stage|backup|new-lib|new-bin) ;;
-            *) echo "❌ $undo has an unexpected entry '$entry'; left untouched. Inspect it by hand, then remove it."; return 1 ;;
-        esac
-    done < <(${priv[@]+"${priv[@]}"} ls -A -- "$undo" 2> /dev/null)
-    if ${priv[@]+"${priv[@]}"} test -d "$undo/backup"; then
+    claim="$root/.franken-ollama-undo.claimed-$$-$RANDOM"
+    if ! ${priv[@]+"${priv[@]}"} mv -T -- "$undo" "$claim"; then
+        echo "❌ Could not claim $undo; left untouched. Inspect it by hand."
+        return 1
+    fi
+    ${priv[@]+"${priv[@]}"} chmod 0700 "$claim" 2> /dev/null || true
+    # --- validation, on the claimed directory only ---
+    local bad=""
+    franken_ollama__node_ok "$claim" dir "" ${priv[@]+"${priv[@]}"} || bad="the area is not a root-owned, non-writable real directory"
+    if [ -z "$bad" ]; then
+        while IFS= read -r entry; do
+            case "$entry" in
+                ''|stage|backup) ;;
+                new-lib|new-bin) franken_ollama__node_ok "$claim/$entry" file "" ${priv[@]+"${priv[@]}"} || bad="marker $entry is not a root-owned regular file" ;;
+                *) bad="unexpected entry '$entry'" ;;
+            esac
+        done < <(${priv[@]+"${priv[@]}"} ls -A -- "$claim" 2> /dev/null)
+    fi
+    if [ -z "$bad" ]; then
+        for entry in stage backup; do
+            if ${priv[@]+"${priv[@]}"} test -e "$claim/$entry" || ${priv[@]+"${priv[@]}"} test -L "$claim/$entry"; then
+                franken_ollama__node_ok "$claim/$entry" dir "" ${priv[@]+"${priv[@]}"} || bad="$entry is not a root-owned, non-writable real directory"
+            fi
+        done
+    fi
+    if [ -z "$bad" ] && ${priv[@]+"${priv[@]}"} test -d "$claim/backup"; then
         while IFS= read -r entry; do
             case "$entry" in
                 ''|lib|bin) ;;
-                *) echo "❌ $undo/backup has an unexpected entry '$entry'; left untouched. Inspect it by hand, then remove it."; return 1 ;;
+                *) bad="unexpected backup entry '$entry'" ;;
             esac
-        done < <(${priv[@]+"${priv[@]}"} ls -A -- "$undo/backup" 2> /dev/null)
-    fi
-    for i in 0 1; do
-        name="${names[$i]}"
-        target="${targets[$i]}"
-        if ${priv[@]+"${priv[@]}"} test -e "$undo/backup/$name" || ${priv[@]+"${priv[@]}"} test -L "$undo/backup/$name"; then
-            backed+=("$i")
-            if ${priv[@]+"${priv[@]}"} test -e "$target" || ${priv[@]+"${priv[@]}"} test -L "$target"; then
-                # the live item is only safe to replace when it is provably the new one:
-                # its marker exists and the staged copy is gone (it was moved into place)
-                if ! { ${priv[@]+"${priv[@]}"} test -e "$undo/new-$name" \
-                    && ! ${priv[@]+"${priv[@]}"} test -e "$undo/stage/${target#"$root/"}"; }; then
-                    echo "❌ $undo/backup/$name and the live $target both exist and it is not clear which is the old one; left untouched. Inspect both by hand."
-                    return 1
-                fi
+        done < <(${priv[@]+"${priv[@]}"} ls -A -- "$claim/backup" 2> /dev/null)
+        if [ -z "$bad" ] && { ${priv[@]+"${priv[@]}"} test -e "$claim/backup/lib" || ${priv[@]+"${priv[@]}"} test -L "$claim/backup/lib"; }; then
+            if ! franken_ollama__node_ok "$claim/backup/lib" dir "" ${priv[@]+"${priv[@]}"} \
+                || [ -n "$(${priv[@]+"${priv[@]}"} find "$claim/backup/lib" ! -uid "$(franken_ollama__owner_uid)" -print -quit 2> /dev/null)" ] \
+                || [ -n "$(${priv[@]+"${priv[@]}"} find "$claim/backup/lib" ! -type l -perm /022 -print -quit 2> /dev/null)" ]; then
+                bad="backup/lib is not a real directory tree owned by root and not writable by others"
             fi
         fi
-    done
-    if ! franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"}; then
-        echo "❌ Could not restore the previous Ollama files from $undo; it is kept. Inspect it by hand."
+        if [ -z "$bad" ] && { ${priv[@]+"${priv[@]}"} test -e "$claim/backup/bin" || ${priv[@]+"${priv[@]}"} test -L "$claim/backup/bin"; }; then
+            franken_ollama__node_ok "$claim/backup/bin" file 1 ${priv[@]+"${priv[@]}"} || bad="backup/bin is not a root-owned regular file with one link"
+        fi
+    fi
+    if [ -z "$bad" ]; then
+        for i in 0 1; do
+            name="${names[$i]}"
+            target="${targets[$i]}"
+            if ${priv[@]+"${priv[@]}"} test -e "$claim/backup/$name"; then
+                backed+=("$i")
+                if ${priv[@]+"${priv[@]}"} test -e "$target" || ${priv[@]+"${priv[@]}"} test -L "$target"; then
+                    # the live item is only replaced when it is provably the new one:
+                    # its marker exists and the staged copy is gone (moved into place)
+                    if ! { ${priv[@]+"${priv[@]}"} test -e "$claim/new-$name" \
+                        && ! ${priv[@]+"${priv[@]}"} test -e "$claim/stage/${target#"$root/"}"; }; then
+                        bad="backup/$name and the live $target both exist and it is not clear which is the old one"
+                    fi
+                fi
+            fi
+        done
+    fi
+    if [ -n "$bad" ]; then
+        echo "❌ $bad; the area is left untouched as $claim. Inspect it by hand."
         return 1
     fi
-    for i in "${backed[@]+"${backed[@]}"}"; do
-        if ! ${priv[@]+"${priv[@]}"} test -e "${targets[$i]}" && ! ${priv[@]+"${priv[@]}"} test -L "${targets[$i]}"; then
-            echo "❌ ${targets[$i]} is missing after the restore; check $root by hand."
-            return 1
-        fi
-    done
-    if ${priv[@]+"${priv[@]}"} test -e "$undo" || ${priv[@]+"${priv[@]}"} test -L "$undo"; then
-        echo "❌ $undo is still there after the restore; check it by hand."
+    if ! franken_ollama__restore_from "$root" "$claim" ${priv[@]+"${priv[@]}"}; then
+        echo "❌ Could not restore the previous Ollama files from $claim; it is kept. Inspect it by hand."
+        return 1
+    fi
+    if ${priv[@]+"${priv[@]}"} test -e "$claim" || ${priv[@]+"${priv[@]}"} test -L "$claim"; then
+        echo "❌ $claim is still there after the restore; check it by hand."
         return 1
     fi
     echo "✅ Previous Ollama files restored and verified"

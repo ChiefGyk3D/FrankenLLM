@@ -9,9 +9,11 @@
 # Usage: tests/test-ollama-verify.sh
 
 set -u
+umask 022   # the undo-area checks reject group and other writable files, as they do for root
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../remote/unit-lib.sh
 source "$REPO/remote/unit-lib.sh"
+franken_ollama__owner_uid() { id -u; }   # seam: the fake tree belongs to the test user
 command -v zstd > /dev/null || { echo "zstd is required for this test"; exit 2; }
 
 PASS=0
@@ -225,19 +227,50 @@ mkdir_stale
 rm -f "$UNDO/new-lib"
 OUT=$(franken_ollama_undo_recover "$WORK/root" env 2>&1); RC=$?
 check "recover ambiguous: refused" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
-check "recover ambiguous: left exactly as found" "old new" "$(cat "$UNDO/backup/lib/OLD") $(cat "$WORK/root/lib/ollama/libfoo.so")"
+CLAIM="$(echo "$WORK"/root/.franken-ollama-undo.claimed-*)"
+check "recover ambiguous: left exactly as found, under the claimed name" "old new no" "$(cat "$CLAIM/backup/lib/OLD") $(cat "$WORK/root/lib/ollama/libfoo.so") $([ -e "$UNDO" ] && echo yes || echo no)"
+check "recover ambiguous: a second run is blocked by the claim" "yes" "$(franken_ollama_undo_recover "$WORK/root" env 2>&1 | grep -q 'left over' && echo yes || echo no)"
 # a new install must not start on top of an area it does not understand
 : > "$LOG"
 OUT=$(PATH="$WORK/stub:$PATH" STUB_LOG="$LOG" STUB_ARTIFACT="$WORK/art/good.tar.zst" \
     franken_ollama_install_verified 0.33.2 "$GOOD_SHA" "$ASSET" "$WORK/root" env 2>&1); RC=$?
 check "install over an unclear undo area: refused, nothing downloaded" "yes 0" "$([ "$RC" -ne 0 ] && echo yes || echo no) $(grep -c '^curl' "$LOG" || true)"
-check "install over an unclear undo area: backup kept" "old" "$(cat "$UNDO/backup/lib/OLD" 2> /dev/null)"
+check "install over an unclear undo area: backup kept" "old" "$(cat "$CLAIM/backup/lib/OLD" 2> /dev/null)"
 # a symlink in place of the area is never followed
 rm -rf "${WORK:?}/root"; mkdir -p "$WORK/root" "$WORK/elsewhere"; ln -s "$WORK/elsewhere" "$UNDO"
-check "recover refuses a symlinked undo area" "yes yes" "$(franken_ollama_undo_recover "$WORK/root" env > /dev/null 2>&1 || echo yes) $([ -L "$UNDO" ] && echo yes || echo no)"
+check "recover refuses a symlinked undo area, target never followed" "yes yes yes" "$(franken_ollama_undo_recover "$WORK/root" env > /dev/null 2>&1 || echo yes) $(for d in "$WORK"/root/.franken-ollama-undo.claimed-*; do [ -L "$d" ] && echo yes; done) $([ -z "$(ls -A "$WORK/elsewhere")" ] && echo yes || echo no)"
 # restore itself keeps the area while a backup could not go back
 rm -rf "${WORK:?}/root"; mkdir -p "$WORK/root/lib/ollama" "$UNDO/backup/lib"; echo new > "$WORK/root/lib/ollama/libfoo.so"; echo old > "$UNDO/backup/lib/OLD"
 check "restore keeps a backup it could not put back" "yes yes" "$(franken_ollama_undo_restore "$WORK/root" env > /dev/null 2>&1 || echo yes) $([ -e "$UNDO/backup/lib/OLD" ] && echo yes || echo no)"
+
+# a failing move of the backup after the live item was set aside: the live item comes back
+cat > "$WORK/stub/priv-backup-mv-fails" << 'STUB'
+#!/bin/bash
+# removal and quarantine moves work; moving a backup into place is rejected
+if [ "$1" = mv ] && [[ "$*" == *"/backup/"* ]]; then exit 1; fi
+exec "$@"
+STUB
+chmod +x "$WORK/stub/priv-backup-mv-fails"
+mkdir_stale
+OUT=$(franken_ollama_undo_recover "$WORK/root" "$WORK/stub/priv-backup-mv-fails" 2>&1); RC=$?
+CLAIM="$(echo "$WORK"/root/.franken-ollama-undo.claimed-*)"
+check "restore move fails: recovery reports failure" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "restore move fails: the live lib is back (never left missing)" "new" "$(cat "$WORK/root/lib/ollama/libfoo.so" 2> /dev/null)"
+check "restore move fails: the backup is kept in the claimed area" "old" "$(cat "$CLAIM/backup/lib/OLD" 2> /dev/null)"
+# a privilege wrapper that rejects every move: nothing is deleted either
+cat > "$WORK/stub/priv-all-mv-fail" << 'STUB'
+#!/bin/bash
+if [ "$1" = mv ] && [[ "$*" != *"claimed-"*"-"* || "$*" == *"/quarantine-"* || "$*" == *"/backup/"* ]]; then exit 1; fi
+exec "$@"
+STUB
+chmod +x "$WORK/stub/priv-all-mv-fail"
+mkdir_stale
+OUT=$(franken_ollama__restore_from "$WORK/root" "$UNDO" "$WORK/stub/priv-all-mv-fail" 2>&1); RC=$?
+check "all moves rejected: restore fails, live lib still there, backup kept" "yes new old" "$([ "$RC" -ne 0 ] && echo yes || echo no) $(cat "$WORK/root/lib/ollama/libfoo.so" 2> /dev/null) $(cat "$UNDO/backup/lib/OLD" 2> /dev/null)"
+# a successful restore leaves no quarantine behind
+mkdir_stale
+franken_ollama_undo_recover "$WORK/root" env > /dev/null 2>&1
+check "restore ok: no quarantine or claimed area left" "" "$(for d in "$WORK"/root/*claimed* "$WORK"/root/*quarantine*; do [ -e "$d" ] && echo "$d"; done)"
 
 # --- download failure, bad inputs ----------------------------------------------------------------
 : > "$LOG"
