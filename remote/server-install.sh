@@ -144,13 +144,15 @@ unit_state_is() {
     [ "$got" = "$3" ]
 }
 
-# unit_file_is_original NAME HAD_FILE - the unit file equals the backup, or is absent if there was none
+# unit_file_is_original NAME HAD_FILE - HAD_FILE is 1 (a regular unit file: it
+# equals the backup), "link" (a masking symlink to /dev/null: it is that symlink
+# again) or 0 (there was nothing: neither a file nor a symlink exists now)
 unit_file_is_original() {
-    if [ "$2" = "1" ]; then
-        sudo cmp -s "$STAGE/backup/$1.service" "$UNIT_DIR/$1.service"
-    else
-        ! sudo test -e "$UNIT_DIR/$1.service"
-    fi
+    case "$2" in
+        1) sudo cmp -s "$STAGE/backup/$1.service" "$UNIT_DIR/$1.service" ;;
+        link) [ "$(sudo readlink "$UNIT_DIR/$1.service" 2> /dev/null || true)" = "/dev/null" ] ;;
+        *) ! sudo test -e "$UNIT_DIR/$1.service" && ! sudo test -L "$UNIT_DIR/$1.service" ;;
+    esac
 }
 
 yn() { if [ "$1" = "1" ]; then echo yes; else echo no; fi; }
@@ -173,6 +175,9 @@ rollback_units() {
     fi
     if [ "$DEFAULT_WAS_MASKED" -eq 0 ]; then
         rb "unmask ollama.service" sudo systemctl unmask ollama.service
+    else
+        # it was masked before: the retirement step may have removed the mask
+        rb "mask ollama.service again" sudo systemctl mask ollama.service
     fi
     rb "systemd daemon-reload" sudo systemctl daemon-reload
     for u in "${UNITS[@]}"; do
@@ -246,6 +251,12 @@ fi
 
 # Install Ollama
 echo "Installing Ollama..."
+# A previous run that was killed mid-swap can leave the only copy of the old
+# files in the undo area. Put them back and verify before anything new starts;
+# an unclear layout stops the install and is left exactly as found.
+if ! franken_ollama_undo_recover /usr/local sudo; then
+    exit 1
+fi
 # An existing install is kept unless a pin is set and it differs.
 INSTALLED_VERSION=""
 if command -v ollama &> /dev/null; then
@@ -364,7 +375,17 @@ if systemctl is-active --quiet ollama.service 2> /dev/null; then DEFAULT_WAS_ACT
 DEFAULT_STATE="$(systemctl is-enabled ollama.service 2> /dev/null || true)"
 if [ "$DEFAULT_STATE" = "enabled" ]; then DEFAULT_WAS_ENABLED=1; fi
 if [ "$DEFAULT_STATE" = "masked" ]; then DEFAULT_WAS_MASKED=1; fi
-if sudo test -f "$UNIT_DIR/ollama.service"; then
+# A masked unit is a symlink to /dev/null, not a unit file: it is never backed up
+# as a file (that would copy an empty file over the mask on rollback). Only a
+# non-symlink regular file counts as a file. Any other symlink is not understood.
+if sudo test -L "$UNIT_DIR/ollama.service"; then
+    if [ "$(sudo readlink "$UNIT_DIR/ollama.service")" = "/dev/null" ]; then
+        DEFAULT_WAS_FILE="link"
+    else
+        echo "❌ $UNIT_DIR/ollama.service is a symlink to something other than /dev/null; refusing to replace it (nothing was changed)"
+        exit 1
+    fi
+elif sudo test -f "$UNIT_DIR/ollama.service"; then
     DEFAULT_WAS_FILE=1
     sudo cp -p "$UNIT_DIR/ollama.service" "$STAGE/backup/ollama.service"
 fi

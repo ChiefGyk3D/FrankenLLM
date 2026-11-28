@@ -206,6 +206,39 @@ install_priv env "$WORK/art/good.tar.zst" "$GOOD_SHA"
 franken_ollama_undo_discard "$WORK/root" env
 check "discard: undo area removed, new install stays" "no lib" "$([ -e "$UNDO" ] && echo yes || echo no) $(cat "$WORK/root/lib/ollama/libfoo.so")"
 
+# --- a leftover undo area from a killed run is recovered, or left alone when unclear -------------
+mkdir_stale() {  # mkdir_stale -> an old install moved aside after the first swap
+    rm -rf "${WORK:?}/root"
+    mkdir -p "$WORK/root/lib/ollama" "$WORK/root/bin" "$UNDO/backup/lib" "$UNDO/stage"
+    echo old > "$UNDO/backup/lib/OLD"
+    echo new > "$WORK/root/lib/ollama/libfoo.so"
+    touch "$UNDO/new-lib"
+    echo OLDBIN > "$WORK/root/bin/ollama"
+}
+mkdir_stale
+OUT=$(franken_ollama_undo_recover "$WORK/root" env 2>&1); RC=$?
+check "recover: rc" "0" "$RC"
+check "recover: old lib back, new lib gone, area removed" "old no no" "$(cat "$WORK/root/lib/ollama/OLD") $([ -e "$WORK/root/lib/ollama/libfoo.so" ] && echo yes || echo no) $([ -e "$UNDO" ] && echo yes || echo no)"
+check "recover: nothing to do is fine" "0" "$(franken_ollama_undo_recover "$WORK/root" env > /dev/null 2>&1; echo $?)"
+# a backup next to a live item without a marker: not understood, kept as found
+mkdir_stale
+rm -f "$UNDO/new-lib"
+OUT=$(franken_ollama_undo_recover "$WORK/root" env 2>&1); RC=$?
+check "recover ambiguous: refused" "yes" "$([ "$RC" -ne 0 ] && echo yes || echo no)"
+check "recover ambiguous: left exactly as found" "old new" "$(cat "$UNDO/backup/lib/OLD") $(cat "$WORK/root/lib/ollama/libfoo.so")"
+# a new install must not start on top of an area it does not understand
+: > "$LOG"
+OUT=$(PATH="$WORK/stub:$PATH" STUB_LOG="$LOG" STUB_ARTIFACT="$WORK/art/good.tar.zst" \
+    franken_ollama_install_verified 0.33.2 "$GOOD_SHA" "$ASSET" "$WORK/root" env 2>&1); RC=$?
+check "install over an unclear undo area: refused, nothing downloaded" "yes 0" "$([ "$RC" -ne 0 ] && echo yes || echo no) $(grep -c '^curl' "$LOG" || true)"
+check "install over an unclear undo area: backup kept" "old" "$(cat "$UNDO/backup/lib/OLD" 2> /dev/null)"
+# a symlink in place of the area is never followed
+rm -rf "${WORK:?}/root"; mkdir -p "$WORK/root" "$WORK/elsewhere"; ln -s "$WORK/elsewhere" "$UNDO"
+check "recover refuses a symlinked undo area" "yes yes" "$(franken_ollama_undo_recover "$WORK/root" env > /dev/null 2>&1 || echo yes) $([ -L "$UNDO" ] && echo yes || echo no)"
+# restore itself keeps the area while a backup could not go back
+rm -rf "${WORK:?}/root"; mkdir -p "$WORK/root/lib/ollama" "$UNDO/backup/lib"; echo new > "$WORK/root/lib/ollama/libfoo.so"; echo old > "$UNDO/backup/lib/OLD"
+check "restore keeps a backup it could not put back" "yes yes" "$(franken_ollama_undo_restore "$WORK/root" env > /dev/null 2>&1 || echo yes) $([ -e "$UNDO/backup/lib/OLD" ] && echo yes || echo no)"
+
 # --- download failure, bad inputs ----------------------------------------------------------------
 : > "$LOG"
 check "curl failure: rc" "yes" "$(STUB_CURL_FAIL=1 PATH="$WORK/stub:$PATH" STUB_LOG="$LOG" STUB_ARTIFACT="$WORK/art/good.tar.zst" \

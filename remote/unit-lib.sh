@@ -187,6 +187,8 @@ franken_ollama_install_verified() {
     fi
     local work undo stage staged_version i
     local -a names=(lib bin) targets staged
+    # never delete a leftover undo area unexamined: it may hold the only old copy
+    franken_ollama_undo_recover "$root" ${priv[@]+"${priv[@]}"} || return 1
     work="$(mktemp -d)" || return 1
     if ! franken_ollama__fetch_verify "$url" "$asset" "$sha" "$work"; then
         rm -rf -- "${work:?}"
@@ -197,7 +199,6 @@ franken_ollama_install_verified() {
     # has been validated; the old files are moved aside, not deleted.
     undo="$root/.franken-ollama-undo"
     stage="$undo/stage"
-    ${priv[@]+"${priv[@]}"} rm -rf -- "$undo" || { rm -rf -- "${work:?}"; return 1; }
     if ! ${priv[@]+"${priv[@]}"} install -d -m 0755 "$undo" "$stage" "$undo/backup" "$root/bin" "$root/lib"; then
         rm -rf -- "${work:?}"
         franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"} > /dev/null
@@ -285,10 +286,85 @@ franken_ollama_undo_restore() {
             ${priv[@]+"${priv[@]}"} mv -- "$undo/backup/${names[$i]}" "${targets[$i]}" || rc=1
         fi
     done
+    # a backup that could not go back is the only old copy: keep the area
+    for i in 0 1; do
+        if ${priv[@]+"${priv[@]}"} test -e "$undo/backup/${names[$i]}" || ${priv[@]+"${priv[@]}"} test -L "$undo/backup/${names[$i]}"; then
+            rc=1
+        fi
+    done
     if [ "$rc" -eq 0 ]; then
         ${priv[@]+"${priv[@]}"} rm -rf -- "$undo" || rc=1
     fi
     return "$rc"
+}
+
+# franken_ollama_undo_recover ROOT [PRIVILEGE_CMD...] - the undo area from an
+# earlier run exists (the run was killed before it could clean up). If its layout
+# is one this code can have produced, run franken_ollama_undo_restore and verify
+# that every backed-up item is back in place. Anything else (a symlink, unknown
+# entries, a backup next to a live item without a marker, a failed or unverified
+# restore) fails closed: returns 1 with a message and leaves the area as found
+# whenever the layout was not understood. Returns 0 when there was nothing to do.
+franken_ollama_undo_recover() {
+    local root="$1" undo entry i name target
+    shift
+    local -a priv=("$@") names=(lib bin) targets backed=()
+    undo="$root/.franken-ollama-undo"
+    if ! ${priv[@]+"${priv[@]}"} test -e "$undo" && ! ${priv[@]+"${priv[@]}"} test -L "$undo"; then
+        return 0
+    fi
+    targets=("$root/lib/ollama" "$root/bin/ollama")
+    echo "⚠️  Found $undo from an interrupted earlier run; restoring the previous Ollama files first..."
+    if ${priv[@]+"${priv[@]}"} test -L "$undo" || ! ${priv[@]+"${priv[@]}"} test -d "$undo"; then
+        echo "❌ $undo is not a plain directory; left untouched. Inspect it by hand, then remove it."
+        return 1
+    fi
+    while IFS= read -r entry; do
+        case "$entry" in
+            ''|stage|backup|new-lib|new-bin) ;;
+            *) echo "❌ $undo has an unexpected entry '$entry'; left untouched. Inspect it by hand, then remove it."; return 1 ;;
+        esac
+    done < <(${priv[@]+"${priv[@]}"} ls -A -- "$undo" 2> /dev/null)
+    if ${priv[@]+"${priv[@]}"} test -d "$undo/backup"; then
+        while IFS= read -r entry; do
+            case "$entry" in
+                ''|lib|bin) ;;
+                *) echo "❌ $undo/backup has an unexpected entry '$entry'; left untouched. Inspect it by hand, then remove it."; return 1 ;;
+            esac
+        done < <(${priv[@]+"${priv[@]}"} ls -A -- "$undo/backup" 2> /dev/null)
+    fi
+    for i in 0 1; do
+        name="${names[$i]}"
+        target="${targets[$i]}"
+        if ${priv[@]+"${priv[@]}"} test -e "$undo/backup/$name" || ${priv[@]+"${priv[@]}"} test -L "$undo/backup/$name"; then
+            backed+=("$i")
+            if ${priv[@]+"${priv[@]}"} test -e "$target" || ${priv[@]+"${priv[@]}"} test -L "$target"; then
+                # the live item is only safe to replace when it is provably the new one:
+                # its marker exists and the staged copy is gone (it was moved into place)
+                if ! { ${priv[@]+"${priv[@]}"} test -e "$undo/new-$name" \
+                    && ! ${priv[@]+"${priv[@]}"} test -e "$undo/stage/${target#"$root/"}"; }; then
+                    echo "❌ $undo/backup/$name and the live $target both exist and it is not clear which is the old one; left untouched. Inspect both by hand."
+                    return 1
+                fi
+            fi
+        fi
+    done
+    if ! franken_ollama_undo_restore "$root" ${priv[@]+"${priv[@]}"}; then
+        echo "❌ Could not restore the previous Ollama files from $undo; it is kept. Inspect it by hand."
+        return 1
+    fi
+    for i in "${backed[@]+"${backed[@]}"}"; do
+        if ! ${priv[@]+"${priv[@]}"} test -e "${targets[$i]}" && ! ${priv[@]+"${priv[@]}"} test -L "${targets[$i]}"; then
+            echo "❌ ${targets[$i]} is missing after the restore; check $root by hand."
+            return 1
+        fi
+    done
+    if ${priv[@]+"${priv[@]}"} test -e "$undo" || ${priv[@]+"${priv[@]}"} test -L "$undo"; then
+        echo "❌ $undo is still there after the restore; check it by hand."
+        return 1
+    fi
+    echo "✅ Previous Ollama files restored and verified"
+    return 0
 }
 
 # franken_ollama_undo_discard ROOT [PRIVILEGE_CMD...] - the install succeeded:
